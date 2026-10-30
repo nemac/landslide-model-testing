@@ -6,7 +6,7 @@ import {
 import MapView from "./MapView";
 import { CompareCharts, ReviewCharts, SlideCharts } from "./Charts";
 import { Impacts, countImpacts, latestOvertureRelease } from "./overture";
-import { ARRIVAL_BINS, BASEMAPS, BasemapKey, DEPTH_BANDS, Index, LAYERS, LayerId, describeRun } from "./config";
+import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index, LAYERS, LayerId, ROAD_COLOR, describeRun } from "./config";
 
 const LEFT = 320;
 const RIGHT = 560;
@@ -130,6 +130,13 @@ export default function App() {
         {DEPTH_BANDS.map((b) => <Swatch key={b.band} color={b.color} label={b.label} />)}
         <Typography variant="subtitle2" sx={{ mt: 1.5 }} gutterBottom>Arrival time</Typography>
         {ARRIVAL_BINS.map((b) => <Swatch key={b.bin} color={b.color} label={b.label} />)}
+        <Typography variant="subtitle2" sx={{ mt: 1.5 }} gutterBottom>Other layers</Typography>
+        <Swatch color="rgba(27,158,119,0.35)" border="#1b9e77" label="Source area" />
+        <Swatch color="#1b9e77" label="Release point" shape="circle" />
+        <Swatch color="#2b6f8b" label="Storm inflow point" shape="circle" />
+        <Swatch color="rgba(31,120,180,0.4)" border="#1f78b4" label="NCGS landslide inventory" />
+        <Swatch color={BUILDING_COLOR} border="#8c6d1f" label="Building touched (Overture)" />
+        <Swatch color={ROAD_COLOR} label="Road touched (Overture)" shape="line" />
       </Drawer>
 
       <Box sx={{ position: "relative", flex: 1 }}>
@@ -201,10 +208,15 @@ function Stat({ label, value, sub }: { label: string; value: number | string; su
   );
 }
 
-function Swatch({ color, label }: { color: string; label: string }) {
+function Swatch({ color, label, border, shape = "box" }: { color: string; label: string; border?: string; shape?: "box" | "circle" | "line" }) {
+  const sx = shape === "circle"
+    ? { width: 12, height: 12, borderRadius: "50%", bgcolor: color, border: "2px solid #fff", boxShadow: "0 0 0 1px #999", mx: "3px" }
+    : shape === "line"
+      ? { width: 18, height: 3, bgcolor: color, my: "5.5px" }
+      : { width: 18, height: 14, bgcolor: color, border: `1px solid ${border ?? "#999"}` };
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      <Box sx={{ width: 18, height: 14, bgcolor: color, border: "1px solid #999" }} />
+      <Box sx={sx} />
       <Typography variant="caption">{label}</Typography>
     </Stack>
   );
