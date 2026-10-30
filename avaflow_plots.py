@@ -178,7 +178,18 @@ def review_figure(s, name, run_dir, path, dem_tr):
     fig.tight_layout()
     out = os.path.join(PLOTS, f"{s['id']}_{name}_review.png")
     fig.savefig(out, dpi=130); plt.close(fig)
-    return out, prof
+
+    # the same numbers as plain data, for the web viewer's charts
+    def clean(v):
+        return None if v is None or not np.isfinite(v) else round(float(v), 3)
+    data = {
+        "volumes": [{"t_min": round(float(t) / 60, 2), "ground": clean(g), "water": clean(w), "total": clean(g + w)}
+                    for t, g, w in zip(*vol)] if vol else [],
+        "profile": [{"dist_m": clean(m), "peak_m": clean(p), "first_s": clean(f)} for m, p, f in zip(*prof)] if prof else [],
+        "bands": [{"label": l, "area_m2": a} for l, a in zip(labels, areas)],
+        "storm": storm,
+    }
+    return out, prof, data
 
 
 def compare_figure(s, profiles):
@@ -211,6 +222,9 @@ if __name__ == "__main__":
     want = [int(a) for a in sys.argv[1:] if a.isdigit()] or None
     os.makedirs(PLOTS, exist_ok=True)
     slides = load_slides()
+    charts_p = os.path.join(PLOTS, "charts.json")
+    # running for every slide starts the chart data fresh; running for some keeps the rest
+    charts = json.load(open(charts_p)) if want and os.path.exists(charts_p) else {}
     for fid in sorted(slides):
         if want and fid not in want:
             continue
@@ -218,6 +232,7 @@ if __name__ == "__main__":
         runs = runs_on_disk(s)
         if not runs:
             continue
+        charts[s["id"]] = {"fid": fid, "released_m3": round(s["volume_m3"], 1), "runs": {}}
         dem, tr = _read(os.path.join(INPUTS, s["id"], "dem.tif"))
         # the ground any run covered, so every run of the slide shares one path
         covered = np.zeros(dem.shape, bool)
@@ -227,7 +242,11 @@ if __name__ == "__main__":
         path = flow_path(dem, tr, s, covered)
         profiles = []
         for name, d in runs:
-            out, prof = review_figure(s, name, d, path, tr)
+            out, prof, data = review_figure(s, name, d, path, tr)
             profiles.append((name, prof))
+            charts[s["id"]]["runs"][name] = data
             print(f"   {os.path.basename(out)}", flush=True)
         print(f"   {os.path.basename(compare_figure(s, profiles))}", flush=True)
+    with open(charts_p, "w") as f:
+        json.dump(charts, f)
+    print(f"   charts.json: {len(charts)} slides")

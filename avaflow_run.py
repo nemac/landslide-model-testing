@@ -4,8 +4,10 @@ Run r.avaflow (4.0G, in GRASS GIS 8.4) on the landslide sources.
     python3 avaflow_run.py                 all 20 slides
     python3 avaflow_run.py 8 13            slides with these fids only
     python3 avaflow_run.py --collect       rebuild the geopackages from runs already on disk
-    python3 avaflow_run.py 8 --runs slope15_water25,slope15_water50
+    python3 avaflow_run.py 8 --runs stopslope15_soilsat_entrain
                                            only these runs (names from RUNS) for slide 8
+    python3 avaflow_run.py --workers 4     slides in parallel, 4 at a time (default WORKERS)
+    python3 avaflow_run.py --redo          rerun runs that are already on disk (otherwise kept)
 
 Reads the source areas from inputs/sourceareas_dambreach.gpkg and the release
 points from inputs/sourceareas_min_elev.gpkg (neither is kept in git).
@@ -47,7 +49,7 @@ OUTPUTS = os.path.join(HERE, "outputs")   # every geopackage and CSV the scripts
 GRASS = "/usr/local/bin/grass"
 CRS = "EPSG:6542"                   # NAD83(2011) / North Carolina, metres
 CELL_M = 10.0
-HALF_BOX_M = 1500.0                 # terrain 1.5 km each side of the point
+HALF_BOX_M = 2500.0                 # terrain 2.5 km each side of the point (was 1.5 km; low stop slopes clipped)
 DEM_URL = "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 RELEASE_THICKNESS = "volume"        # "volume": table volume / polygon area; "height": the table's height column
 RELEASE_AT = "point"                # "point": the whole volume on the cell at the point, the lowest spot of the
@@ -76,21 +78,18 @@ BANDS = [(0.05, 0.5), (0.5, 1.0), (1.0, 2.0), (2.0, 1e9)]
 # density is the solid grains, 2650 kg/m3, as r.avaflow asks; the model handles the pore
 # space between grains itself. Runs before 29 Oct 2026 used 2000 (loose bulk soil).
 D = {"fluid": 0.0, "density": 2650, "time": "10,600"}   # fluid friction, kg/m3, output step and end (s)
+# The run matrix. Every run: pile angle and saturated water share from the soil under
+# the release point (outputs/landslide_soils.csv, made by lookup_soils.py), full volume,
+# entrainment on (the flow digs up the ground it runs over and grows; how deep comes
+# from the soil survey's soil depth, how easily from ENTRAIN_LOG10 below).
+# Crossed: the stop slope at four levels, and the storm (none, or runoff from a 24 hour
+# rainfall of that many inches flowing in at the release point, see storm_inflow).
+STOP_SLOPES = (5, 10, 15, 20)
+STORMS_IN = (None, 5, 10)
 RUNS = [
-    # saturated soil: pile angle and water share from the soil under the release point
-    # (outputs/landslide_soils.csv, made by lookup_soils.py), full volume, stop slope 15
-    # (the plain run without entrainment, already on disk; add it back here to include it)
-    # {"name": "stopslope15_soilsat", "soil": True, "stop_slope": 15, **D},
-    # saturated soil with entrainment on: the flow digs up the ground it runs over and grows.
-    # How deep it can dig comes from the soil survey (soil_depth_cm, how deep the soil
-    # goes before rock). How easily it digs is ENTRAIN_LOG10 below.
-    {"name": "stopslope15_soilsat_entrain", "soil": True, "stop_slope": 15, "entrain": True, **D},
-    # the same, during a storm: runoff from the ground above the release point flows
-    # in at the point for the whole run (r.avaflow hydrograph). "storm_in" is the
-    # 24 hour rainfall in inches; how it becomes an inflow is in storm_inflow below.
-    {"name": "stopslope15_soilsat_entrain_storm5in", "soil": True, "stop_slope": 15, "entrain": True, "storm_in": 5, **D},
-    # an extreme storm, twice the trigger threshold
-    {"name": "stopslope15_soilsat_entrain_storm10in", "soil": True, "stop_slope": 15, "entrain": True, "storm_in": 10, **D},
+    {"name": f"stopslope{ss}_soilsat_entrain" + (f"_storm{st}in" if st else ""),
+     "soil": True, "stop_slope": ss, "entrain": True, **({"storm_in": st} if st else {}), **D}
+    for ss in STOP_SLOPES for st in STORMS_IN
 ]
 WATER_DENSITY = 1000
 SOILS_CSV = os.path.join(OUTPUTS, "landslide_soils.csv")
@@ -193,6 +192,37 @@ def load_slides():
     return out
 
 
+def _trim_results(wd, pf):
+    """
+    Drop what r.avaflow wrote that nothing here reads: the grid for every output step
+    (hflow0000, basechange0001, ...), the hillshade and temperature grids, and the plot
+    and 3D export folders. A run shrinks from about 250 MB to about 15 MB. Kept: the
+    _max and _fin grids, treach, the front grids, and the _files text tables.
+    """
+    import re
+    res = os.path.join(wd, f"{pf}_results")
+    asc = os.path.join(res, f"{pf}_ascii")
+    if os.path.isdir(asc):
+        step = re.compile(rf"^{pf}_(hflow|basechange|hillshade|temperature|vflow|pflow|tflow|tsun)\d*\.asc$")
+        for fn in os.listdir(asc):
+            if step.match(fn) and not fn.endswith(("_max.asc", "_fin.asc")) and not re.match(rf"^{pf}_(hflow|basechange|vflow|pflow|tflow)[123]?_(max|fin)\.asc$", fn):
+                try:
+                    os.remove(os.path.join(asc, fn))
+                except OSError:
+                    pass
+    for sub in (f"{pf}_plots", f"{pf}_vr", f"{pf}_aimec"):
+        shutil.rmtree(os.path.join(res, sub), ignore_errors=True)
+
+
+def _grid_ok(tif, nx):
+    """Does this grid match the current box (nx cells each way)?"""
+    try:
+        with rasterio.open(tif) as a:
+            return a.width == nx and a.height == nx
+    except Exception:
+        return False
+
+
 def make_inputs(s):
     d = os.path.join(INPUTS, s["id"]); os.makedirs(d, exist_ok=True)
     dem_p, rel_p = os.path.join(d, "dem.tif"), os.path.join(d, "hrelease.tif")
@@ -201,6 +231,8 @@ def make_inputs(s):
     right, top = left + 2 * HALF_BOX_M, bottom + 2 * HALF_BOX_M
     nx = ny = int(round(2 * HALF_BOX_M / CELL_M))
     tr = from_origin(left, top, CELL_M, CELL_M)
+    if os.path.exists(dem_p) and not _grid_ok(dem_p, nx):
+        os.remove(dem_p)                      # cut for a different box size; cut again
     if not os.path.exists(dem_p):
         with rasterio.open(DEM_URL) as src:
             sb = transform_bounds(CRS, src.crs, left, bottom, right, top, densify_pts=41)
@@ -234,8 +266,9 @@ def make_inputs(s):
     return dem_p, rel_p, thick, float((rel > 0).sum() * CELL_M * CELL_M), (top, bottom, left, right)
 
 
-def run_slide(s, runs=RUNS):
+def run_slide(s, runs=RUNS, redo=False):
     dem_p, rel_p, thick, rel_area, (top, bottom, left, right) = make_inputs(s)
+    nx = int(round(2 * HALF_BOX_M / CELL_M))
     print(f"{s['id']} (fid {s['fid']}): {s['volume_m3']:,.0f} m³ released {'at the point' if RELEASE_AT == 'point' else 'over the source'}, "
           f"{rel_area:,.0f} m², {thick:.2f} m thick", flush=True)
     ms = os.path.join(PROJECT, s["id"])
@@ -249,6 +282,13 @@ def run_slide(s, runs=RUNS):
         run = run_settings(run, s)
         wd = os.path.join(RUNDIR, s["id"], run["name"]); os.makedirs(wd, exist_ok=True)
         pf = f"ls{s['fid']:02d}"
+        # already on disk for this box size: keep it (--redo forces a rerun)
+        done_h = os.path.join(wd, f"{s['id']}_{run['name']}_hflow_max.tif")
+        done_d = os.path.join(wd, f"{s['id']}_{run['name']}_deposit.tif")
+        if not redo and os.path.exists(done_h) and os.path.exists(done_d) and _grid_ok(done_h, nx):
+            print(f"   {run['name']}: already run, kept", flush=True)
+            out.append((run, done_h, done_d))
+            continue
         shutil.rmtree(os.path.join(wd, f"{pf}_results"), ignore_errors=True)
         water = float(run.get("water_share", 0.0))
         if water > 0:
@@ -314,6 +354,7 @@ def run_slide(s, runs=RUNS):
             with rasterio.open(dst, "w", driver="GTiff", height=arr.shape[0], width=arr.shape[1], count=1,
                                dtype="float32", crs=CRS, transform=atr, nodata=-9999.0) as d:
                 d.write(arr, 1)
+        _trim_results(wd, pf)
         out.append((run, htif, dtif))
         print(f"   {run['name']}: stop slope {run['stop_slope']}°, pile angle {run['pile_angle']}°, water share {water:.0%} -> {os.path.basename(htif)}", flush=True)
     return out
@@ -383,6 +424,22 @@ def _arrival_layer(gp, layer, treach_s, tr, crs, props):
             dst.write(ft)
 
 
+def _drop_layer(gp, layer):
+    """Remove one layer from a geopackage if it is there; the file and its other layers stay."""
+    if not os.path.exists(gp):
+        return
+    try:
+        layers = fiona.listlayers(gp)
+    except Exception:
+        # a half-written file (two writers at once, or a crash mid-write): it is unreadable
+        # and holds nothing recoverable, so start the file again from the runs on disk
+        print(f"   {os.path.basename(gp)} unreadable, rebuilding it", flush=True)
+        os.remove(gp)
+        return
+    if layer in layers:
+        fiona.remove(gp, driver="GPKG", layer=layer)
+
+
 def _read(tif):
     with rasterio.open(tif) as src:
         h = src.read(1); tr = src.transform; crs = src.crs
@@ -405,9 +462,10 @@ def collect(s, results, summary):
                      stopped, banded by how deep it got; starts at the point
     """
     gp = os.path.join(OUTPUTS, f"landslide_{s['fid']:02d}_avaflow.gpkg")
-    if os.path.exists(gp):
-        os.remove(gp)
+    # the geopackage is kept; each run's layers are replaced as they come, nothing else is touched
     for run, htif, dtif in results:
+        for lyr in (f"deposit_{run['name']}", f"arrival_{run['name']}", f"hydrograph_{run['name']}"):
+            _drop_layer(gp, lyr)
         run = run_settings(run, s)
         props = {"source_fid": s["fid"], "slide_id": s["id"], "run": run["name"],
                  "stop_slope_deg": float(run["stop_slope"]), "pile_angle_deg": float(run["pile_angle"]),
@@ -478,37 +536,70 @@ def existing_results(s):
     return out
 
 
+# slides run in parallel, one slide per worker (every run of that slide, in order).
+# Each slide has its own GRASS mapset and run folders, so workers do not collide.
+# r.avaflow uses one core per run; this Mac has 10 cores, so 6 leaves room for the rest.
+WORKERS = 6
+
+
+def _run_one(args):
+    """One slide, all its runs; for the worker pool. Returns (slide id, error or None)."""
+    s, runs, redo = args
+    try:
+        run_slide(s, runs, redo)
+        return s["id"], None
+    except Exception as e:
+        return s["id"], str(e)
+
+
 if __name__ == "__main__":
-    collect_only = "--collect" in sys.argv
-    want = [int(a) for a in sys.argv[1:] if a.isdigit()] or None
-    runs = RUNS
-    if "--runs" in sys.argv:                 # only these run names, e.g. --runs stopslope15_soilsat
-        names = sys.argv[sys.argv.index("--runs") + 1].split(",")
+    argv = sys.argv[1:]
+    collect_only = "--collect" in argv
+    redo = "--redo" in argv                  # rerun even if the result is already on disk
+    runs, workers = RUNS, WORKERS
+    if "--runs" in argv:                     # only these run names, e.g. --runs stopslope15_soilsat_entrain
+        i = argv.index("--runs"); names = argv[i + 1].split(","); del argv[i:i + 2]
         runs = [r for r in RUNS if r["name"] in names]
         if len(runs) != len(names):
             sys.exit(f"unknown run name(s): {set(names) - {r['name'] for r in runs}}")
+    if "--workers" in argv:
+        i = argv.index("--workers"); workers = max(1, int(argv[i + 1])); del argv[i:i + 2]
+    want = [int(a) for a in argv if a.isdigit()] or None
     os.makedirs(GRASSDATA, exist_ok=True); os.makedirs(RUNDIR, exist_ok=True); os.makedirs(OUTPUTS, exist_ok=True)
     if not os.path.isdir(PROJECT):
         subprocess.run([GRASS, "-c", CRS, "-e", PROJECT], check=True, capture_output=True)
     slides = load_slides()
     summary = []
     if not collect_only:
-        for fid in sorted(slides):
-            if want and fid not in want:
-                continue
-            try:
-                run_slide(slides[fid], runs)
-            except Exception as e:
-                print(f"   {slides[fid]['id']} failed: {e}", flush=True)
+        todo = [slides[fid] for fid in sorted(slides) if not want or fid in want]
+        if workers > 1 and len(todo) > 1:
+            from multiprocessing import Pool
+            print(f"{len(todo)} slides, {len(runs)} runs each, {workers} at a time", flush=True)
+            with Pool(min(workers, len(todo))) as pool:
+                for sid, err in pool.imap_unordered(_run_one, [(s, runs, redo) for s in todo]):
+                    print(f"{sid} {'done' if err is None else 'failed: ' + err}", flush=True)
+        else:
+            for s in todo:
+                sid, err = _run_one((s, runs, redo))
+                if err:
+                    print(f"   {sid} failed: {err}", flush=True)
     # the geopackages and the summary always cover every run on disk, for every slide
     for fid in sorted(slides):
         results = existing_results(slides[fid])
         if results:
             collect(slides[fid], results, summary)
+    # the summary is kept too: rows for the slides and runs just collected replace the old
+    # ones; rows for anything else stay as they were
     sp = os.path.join(OUTPUTS, "landslide_avaflow_summary.csv")
+    cols = ["source_fid", "slide_id", "run", "stop_slope_deg", "pile_angle_deg", "water_share", "settings_from",
+            "deposit_area_m2", "deposit_max_depth_m", "deposit_farthest_m",
+            "resting_thickest_m", "released_m3", "entrained_m3", "growth", "storm_in", "storm_water_m3"]
+    fresh = {(r["slide_id"], r["run"]) for r in summary}
+    old = []
+    if os.path.exists(sp):
+        old = [r for r in csv.DictReader(open(sp)) if (r["slide_id"], r["run"]) not in fresh]
+    rows = sorted(old + [{k: str(v) for k, v in r.items()} for r in summary], key=lambda r: (int(r["source_fid"]), r["run"]))
     with open(sp, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["source_fid", "slide_id", "run", "stop_slope_deg", "pile_angle_deg", "water_share", "settings_from",
-                                          "deposit_area_m2", "deposit_max_depth_m", "deposit_farthest_m",
-                                          "resting_thickest_m", "released_m3", "entrained_m3", "growth", "storm_in", "storm_water_m3"])
-        w.writeheader(); w.writerows(summary)
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader(); w.writerows([{c: r.get(c, "") for c in cols} for r in rows])
     print(f"summary: {len(summary)} rows -> {os.path.basename(sp)}")

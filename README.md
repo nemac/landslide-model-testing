@@ -1,300 +1,368 @@
-# landslide-model-testing
+# Landslide runout modelling for western North Carolina source areas
 
-Maps the ground a landslide covers once it lets go, for a set of source areas in
-western North Carolina, using the open-source flow model r.avaflow (version 4.0G)
-inside GRASS GIS 8.4. Everything is driven by two python scripts in this folder.
-This is screening-level work: the aim is a reasonable footprint for each slide, not
-an engineering design.
+This project estimates the ground a landslide would cover once it lets go, for a set
+of mapped source areas in the Blue Ridge of western North Carolina. It uses the
+open-source flow model r.avaflow, run inside GRASS GIS, driven by two Python scripts.
+This document explains what is being modelled, how each input is obtained, what the
+settings mean, and where the method comes from. It is written for a landslide
+specialist who has not used this particular model.
 
-## Files
+This is screening-level work. The aim is a defensible footprint for each source, not
+an engineering design, and the main setting that controls runout has not yet been
+calibrated against a mapped event in this terrain. Section 9 says what that would
+take.
 
-| file | what it is |
+## 1. What question the model answers
+
+Given a source area, its volume, and the terrain below it, where does the material
+go, how far, how deep, and how fast? The model does not ask whether or when the slope
+fails. The source areas and their volumes are inputs, taken as given. Rainfall enters
+only as a way of adding water to the moving mass, not as a trigger.
+
+## 2. The model
+
+r.avaflow (Mergili et al., 2017; Pudasaini and Mergili, 2019) is a raster-based
+simulation of mass flows over terrain. It solves depth-averaged equations of mass and
+momentum conservation on the DEM grid, stepping forward in time, with up to three
+materials of different density moving together and exchanging momentum. The physics
+is the two-phase debris flow model of Pudasaini (2012), generalised to three phases.
+It was built for landslides, debris flows, rock avalanches and their interaction with
+water bodies, and has been applied to events from the Alps to the Himalaya.
+
+The model has no empirical or statistical component. The same inputs give the same
+result every time. It is deterministic, and all of its judgment is in the inputs.
+
+Version 4.0G of r.avaflow is used, compiled against GRASS GIS 8.4 on macOS. The build
+is a manual one because the normal GRASS add-on installer fails on this platform;
+`install_avaflow.sh` records how it was done.
+
+### How it runs
+
+For each source:
+
+1. A 5 km by 5 km square of terrain is cut from the USGS 1/3 arc-second DEM
+   (USGS 3DEP) around the release point and resampled to 10 m cells in NC State
+   Plane metres (EPSG:6542). The square was 3 km until October 30, 2026; the lowest
+   stop slopes ran off its edge.
+2. The whole source volume is placed on the single 10 m cell at the lowest point of
+   the source polygon, as a column of material. The lowest point is used so that
+   the material starts below any impounded water and runs from the source's toe.
+   The column is not physical in its first seconds; the footprint further down the
+   path is what the result rests on.
+3. r.avaflow runs for 10 minutes of model time, writing a grid every 10 seconds.
+4. From the result grids, the script writes one geopackage per source with one
+   polygon layer per run (section 7), and a summary table.
+
+## 3. Inputs
+
+| input | source | notes |
+|---|---|---|
+| terrain | USGS 3DEP 1/3 arc-second DEM | 10 m cells, 5 km box around each release point |
+| source polygon and volume | `inputs/sourceareas_dambreach.gpkg` | volume in acre-feet, converted to m³ |
+| release point | `inputs/sourceareas_min_elev.gpkg` | the lowest point of each source polygon |
+| soil properties | USDA NRCS SSURGO, through the Soil Data Access web service | the map unit under the release point, its dominant component, horizons to 150 cm |
+| material settings | derived from the soil, or set by hand | section 4 |
+| storm runoff | computed from the DEM and a 24-hour rainfall | section 6 |
+
+Soil properties are retrieved by `lookup_soils.py`, which queries Soil Data Access
+for the map unit at each release point, takes the dominant component, and averages
+its horizons by thickness down to 150 cm. The properties used are sand, silt and clay
+content, saturated water content (`wsatiated_r`), water content at field capacity
+(`wthirdbar_r`), water content at wilting point (`wfifteenbar_r`), and the depth of
+the deepest described horizon.
+
+## 4. The three material settings
+
+Every run is defined by three numbers about the material. They are the settings that
+control the result, and each is given one name throughout this project.
+
+### Stop slope
+
+The ground slope below which the moving material loses its momentum and comes to
+rest. r.avaflow calls this the basal friction angle. On ground steeper than this
+angle the material accelerates; on flatter ground it decelerates and stops. It
+describes the resistance between the base of the flow and the ground, including the
+effect of pore water pressure that reduces that resistance in a saturated flow.
+
+Nothing measures this setting. In runout modelling it is obtained by back-analysis:
+running documented past events and adjusting the value until the modelled deposit
+matches the mapped one (Mergili et al., 2020, is a worked example with r.avaflow).
+Typical calibrated values for debris flows are in the range of about 8 to 20
+degrees, with lower values for wetter, more mobile flows.
+
+In this project the stop slope is **set by hand and swept**. Every source is run at
+**5, 10, 15 and 20 degrees**, crossed with the three storm cases of section 6, twelve
+runs per source. Earlier exploratory runs on source 8 also used 8, 12, 18 and 25. The
+four levels are meant to bracket what is seen in the Blue Ridge: 20 for a stiff slide
+that stops on the hillside, 15 for one that reaches the hollow, 10 for a channelised
+debris flow, 5 for a highly mobile, nearly liquefied flow of the kind the 2024
+Helene remnants produced. The result is a sensitivity analysis, not a prediction,
+until a calibration against a mapped Blue Ridge event is done. The viewer and the
+summary table carry every level so the spread is visible for each source.
+
+### Pile angle
+
+The steepest slope at which a loose pile of the material stands without slumping.
+r.avaflow calls this the internal friction angle. It describes grain-on-grain
+resistance within the moving mass.
+
+In this project the pile angle is **taken from the soil survey**. Sand, silt and
+clay percentages give the USDA texture class, and a standard geotechnical table of
+typical friction angles by soil type (for example Das, 2010) gives the value: 31
+degrees for sandy loam, 29 for loam. Of the 20 sources, 17 are on sandy loams and 3
+on loams. A sensitivity test on source 8 varied this setting from 15 to 40 degrees
+and found no measurable change in the footprint, so the approximation costs nothing
+here.
+
+### Water share
+
+The fraction of the moving mass, by volume, that is water. 0 is dry. r.avaflow
+handles this by running its three-material model with the soil as one material and
+water as another; the soil keeps the stop slope and pile angle, the water has no
+frictional resistance of its own, and the two exchange momentum through drag.
+
+In this project the water share is **taken from the soil survey as the saturated
+water content**, averaged over the top 150 cm. For source 8's Toecane bouldery sandy
+loam that is 0.19: when every pore is full, 19 percent of the soil volume is water.
+The other sources range from 0.19 to 0.37. This represents a slope that fails during
+or after heavy rain with its soil fully saturated, which is the triggering condition
+for debris flows in this region (Wooten et al., 2008, 2016).
+
+Water share cannot exceed the saturated content from soil alone. Water above that
+comes from runoff the flow meets in the hollow, which is section 6.
+
+### Other material properties
+
+Soil grain density is set at 2650 kg/m³, as the model expects (it accounts for pore
+space itself). Earlier runs used 2000, the bulk density of loose soil; this reduced
+the wet footprint by about a quarter when corrected, because density governs the
+interaction between the soil and water phases. Cohesion, viscosity and the other
+material parameters are at the model's defaults, which is standard practice for
+debris flows at this level of detail.
+
+## 5. Entrainment
+
+Debris flows in the Blue Ridge typically scour the hollow they travel down to bedrock
+and arrive with several times their initial volume (Wooten et al., 2008; see Hungr et
+al., 2005, for the general process). r.avaflow models this with the erosion model of
+Pudasaini and Fischer (2020): the flow erodes the bed at a rate proportional to its
+momentum, times a coefficient, and the eroded material joins the flow.
+
+Two settings control it:
+
+- **How deep the flow may dig**, a raster in metres. This project **takes it from the
+  soil survey**: the depth of the deepest described horizon for the soil at the
+  release point, applied uniformly across the box. For source 8 that is 2.03 m. The
+  true depth of colluvium in the hollow is likely greater, since hollows accumulate
+  material from their sides; the survey value is a conservative floor.
+- **How easily it digs**, the erosion coefficient. r.avaflow takes it as a power of
+  ten. It is not measurable and is set by calibration; published r.avaflow
+  back-analyses fall roughly between 10⁻⁷ and 10⁻⁶. This project uses **10⁻⁶·⁵** and
+  checks it by the growth factor, final volume divided by released volume. Mapped
+  Blue Ridge debris flows grew roughly 3 to 10 fold. The current runs on source 8
+  grow 1.9 to 2.5 fold, at the low end, so the coefficient is if anything
+  conservative.
+
+In the entrainment runs the entrained soil is given the same saturated water share
+as the released soil.
+
+## 6. Storm runoff
+
+A slide that fails during a storm meets water already running down the hollow, and
+the two mix. r.avaflow can take water in over time at a point through its hydrograph
+input. The method here is deliberately the simplest that is physically grounded:
+
+1. **Catchment.** The cells draining to the release point are counted on the DEM
+   with GRASS `r.watershed`. For source 8, 244 cells, or 2.4 ha.
+2. **Rain rate.** The slide is assumed to occur in the storm's peak hour. In the SCS
+   Type II 24-hour distribution, used for design storms in inland North Carolina,
+   about 45 percent of the 24-hour total falls in that hour (USDA NRCS, 1986). A 5
+   inch storm gives 2.25 inches in the peak hour; a 10 inch storm, 4.5.
+3. **Runoff.** The soil is already saturated, so all peak-hour rain is taken as
+   runoff.
+4. **Inflow.** Rain rate times catchment, held steady for the run: 0.39 m³/s for the
+   5 inch storm and 0.77 for the 10 inch, entering as water at the release cell.
+
+The 5 inch storm is used because about 125 mm in 24 hours is the widely used working
+threshold for debris flow initiation in western North Carolina, with lower totals
+sufficient when the ground is already wet (Wooten et al., 2008, 2016). The 10 inch
+storm is an extreme case, in the range of the 2004 and 2024 hurricane remnants.
+
+What this leaves out: rain falling faster than the ground can absorb before
+saturation, drainage during the storm, and water arriving from upslope outside the
+DEM-derived catchment. For a 24-hour storm on a saturated hillside these are small
+relative to the assumptions already made.
+
+### The hydrograph itself
+
+The storm enters the model as an r.avaflow hydrograph: a text table of time against
+inflow, one row every 10 seconds for the 10 minute run, with the water inflow held at
+the rate computed above and the soil materials at zero. It is written by
+`avaflow_run.py` into the run folder as `storm_hydrograph.txt`, together with
+`storm.json`, which records the catchment area, the peak-hour rain rate and the
+inflow so the numbers behind every storm run can be checked. The hydrograph point is
+the release cell, given to r.avaflow through `hydrocoords`. The viewer draws the same
+table as the first panel of a storm run's charts: a flat line at the inflow rate and
+a rising line for the water added so far.
+
+A steady inflow is a simplification. Real runoff from a 2 to 3 hectare hollow rises
+and falls with the rain over tens of minutes. Holding it at the peak-hour rate for
+the 10 minute run assumes the slide lets go at the height of the storm, which is the
+conservative case and the one the regional threshold describes.
+
+Note on implementation: r.avaflow 4.0G in its default hydrograph mode reads the
+hydrograph's height column as a volumetric rate in m³/s added at the point each time
+step (`HYDADD = 2` in the source). The script writes it that way.
+
+## 7. Outputs
+
+All outputs go to `outputs/`, which is not kept in version control.
+
+**Geopackages.** `landslide_<fid>_avaflow.gpkg`, one per source. Layers:
+
+| layer | content |
 |---|---|
-| `inputs/sourceareas_dambreach.gpkg` | the slide source areas (polygons). `acrefeet` = volume of material, `height` (ft). The `fid` is the slide id. Not kept in git; copy it in. |
-| `inputs/sourceareas_min_elev.gpkg` | one point per source: its lowest spot, where the material is released. Same `fid`. Not kept in git; copy it in. |
-| `avaflow_run.py` | builds the inputs, runs r.avaflow, and writes the geopackages and summary |
-| `lookup_soils.py` | looks up the USDA soil (SSURGO) under each point and turns it into two model settings |
-| `install_avaflow.sh` | installs r.avaflow into GRASS 8.4 on macOS (see Setup) |
-| `docs/r_avaflow_inputs.md` | every r.avaflow input, explained for a GIS user with no geology background |
-| `docs/slide8_storm_test_plan.md` | proposed next test on slide 8: rain to water share formula, renaming, run list. Not yet run |
+| `deposit_<run>` | every cell the material passed through at a depth over 1 cm, as polygons banded by peak depth: 1–5, 5–20, 20–50, 50–100, over 100 cm. Attributes carry the run's settings, area and volume per band |
+| `arrival_<run>` | when the material first reached each cell, as polygons in 5 minute bins |
+| `hydrograph_<run>` | for storm runs, the inflow point with storm total, catchment area, peak rain rate and inflow |
 
-Made by the scripts (not kept in git). Every geopackage and CSV the scripts write
-goes in `outputs/`:
+**Summary table.** `landslide_avaflow_summary.csv`, one row per source and run:
+settings, ground covered, farthest reach from the release point, peak depth, deposit
+thickness at rest, released and entrained volume, growth factor, storm total and storm
+water added.
 
-| file | what it is |
+**Soil table.** `landslide_soils.csv`, one row per source: map unit, component,
+texture, pile angle, saturated, field capacity and wilting point water contents, soil
+depth.
+
+**Figures.** `plots/<source>_<run>_review.png`, four panels per run in the style of a
+dam-break review: material in motion against time, peak depth down the valley,
+arrival time down the valley, and area by depth band. `plots/<source>_compare.png`
+overlays all runs of a source. Distance down the valley is measured along the path
+the material took, traced downhill from the release point.
+
+## 8. The run matrix and what the exploratory runs showed
+
+Every source is run twelve ways: stop slope 5, 10, 15 or 20 degrees, each dry of
+storm runoff or with the 5 inch or 10 inch storm flowing in, always with the soil's
+saturated water share, the soil's pile angle, entrainment on, and the full volume.
+Run names say the settings, for example `stopslope10_soilsat_entrain_storm5in`. The
+results for all sources are in the summary table and the web viewer.
+
+Before the matrix, exploratory runs on source 8 (fid 8, Toecane bouldery sandy loam,
+448 m³ released, 3 km box) established the ranking of the settings:
+
+| finding | numbers from source 8 |
 |---|---|
-| `outputs/landslide_soils.csv` | result of the soil lookup, one row per slide |
-| `outputs/landslide_<fid>_avaflow.gpkg` | one per slide, one layer per run (see Outputs) |
-| `outputs/landslide_avaflow_summary.csv` | one row per slide and run |
-| `outputs/review.qgz` | QGIS project for looking at the results (hand-made, not written by the scripts) |
-| `inputs/LS-<fid>/` | the 10 m terrain (`dem.tif`) and release map (`hrelease.tif`) for that slide |
-| `avaflow_runs/LS-<fid>/<run>/` | r.avaflow's own results plus the depth grids as GeoTIFFs |
-| `grassdata/landslides/` | the GRASS project, one mapset per slide |
-| `logs/` | run logs |
+| the stop slope dominates | ground covered 55,000 m² at 25° against 247,000 m² at 8°, saturated soil, no entrainment |
+| any water at all roughly doubles the footprint | 44,300 m² dry against 98,600 m² at the soil's normal wet-season water content |
+| how wet the soil is below saturation hardly matters | under 10 % change from wet-season to saturated |
+| the pile angle has no effect | no measurable change between 15° and 40° |
+| entrainment reshapes more than it extends | +4 % area, but the deposit fills and spreads across the hollow instead of running as a thin streak |
+| storms add through entrainment | at stop slope 15: 79,900 m² dry of runoff, 85,800 m² with the 5 inch storm, 92,200 m² with the 10 inch storm; growth 1.9×, 2.3×, 2.5× |
 
-## Setup
+The entrainment deposits match the form of mapped Blue Ridge debris flow deposits
+better than the runs without it.
 
-1. GRASS GIS 8.4 for macOS, installed as `/Applications/GRASS-8.4.app`. Everything
-   here runs GRASS from the command line in the background; the GRASS window is
-   never opened.
-2. `bash install_avaflow.sh` downloads, compiles and installs r.avaflow. It is a
-   hand build because the normal `g.extension` install fails on macOS. The script
-   says why in its header.
-3. A python with `numpy rasterio fiona shapely pyproj` for the two scripts here.
-4. The two source geopackages, `sourceareas_dambreach.gpkg` and
-   `sourceareas_min_elev.gpkg`, copied into `inputs/`. Neither is kept in git.
+## 9. Limitations and what comes next
 
-## Running
+- **The stop slope is uncalibrated.** This is the single largest uncertainty, and the
+  model offers the tools to fix it: the `impactarea` and `hdeposit` inputs take a
+  mapped deposit and score the fit. Two or three mapped Blue Ridge debris flows with
+  known source volumes, run at several stop slopes, would give a defensible value or
+  range for this terrain. The NC Geological Survey's inventories from the 2004 and
+  2024 events are the natural source.
+- **The erosion coefficient is likewise uncalibrated**, and interacts with the stop
+  slope: more entrainment runs farther, so the two should not be tuned together on
+  one event. Calibrate the stop slope with entrainment off, then entrainment.
+- **The release geometry** is a column on one cell. It is a reasonable way to start
+  the material at the toe, but it is not a slab failure, and depths in the first
+  50 m of the path should not be read literally.
+- **The 5 km box** truncates runs beyond about 2.5 km from the release point. The 5
+  degree runs are the ones to check against it; the summary's farthest-reach column
+  shows when a run is near the edge.
+- **Storm runoff** rests on the peak-hour assumption and on the DEM catchment. Both
+  are stated and easily changed.
+- **Volume** is taken as the full source. Partial failures are not modelled; the full
+  volume is the conventional design case.
+
+## 10. Running it
 
 ```
-python3 lookup_soils.py                 # once: soil settings for every slide -> outputs/landslide_soils.csv
-python3 avaflow_run.py                  # every run in RUNS for all 20 slides (slow)
-python3 avaflow_run.py 8                # all runs for slide 8 only
-python3 avaflow_run.py 8 --runs stopslope15_soilsat,stopslope15_rain7in_k3   # named runs for slide 8
-python3 avaflow_run.py --collect        # rebuild the geopackages and summary from runs on disk
+python3 lookup_soils.py                 # once: soil table for every source
+python3 avaflow_run.py                  # every run in RUNS for every source
+python3 avaflow_run.py 8                # source 8 only
+python3 avaflow_run.py 8 --runs stopslope15_soilsat_entrain_storm5in
+python3 avaflow_run.py --collect        # rebuild geopackages and summary from runs on disk
+python3 avaflow_plots.py 8              # review figures for source 8
 ```
 
-Each r.avaflow run takes about two minutes. After any run the geopackages and the
-summary are rebuilt for every slide from whatever runs are on disk, so they always
-show everything that has been run.
+Runs already on disk are kept and skipped; `--redo` reruns them. The stop slopes and
+storms in the matrix are the two tuples `STOP_SLOPES` and `STORMS_IN` at the top of
+`avaflow_run.py`.
 
-What a run does, for one slide:
-
-1. cuts a 3 km square of 10 m terrain around the point from the USGS 1/3 arc-second
-   elevation data (NC state plane, EPSG:6542);
-2. puts the whole volume on the one 10 m cell at the point, as a tall column, so the
-   material starts at the lowest spot of the source and runs from there;
-3. runs r.avaflow for 10 model minutes;
-4. keeps the deepest the material got in every cell, and how thick it lies at rest.
-
-## All settings on one page
-
-These are the only things we set. Everything else in r.avaflow is at its default.
-
-| what | value we use | where it comes from |
-|---|---|---|
-| terrain | 10 m DEM, a 3 km square around the slide | USGS, downloaded once per slide |
-| where it starts | the lowest point of the source polygon, one 10 m cell | the source geopackages in `inputs/` |
-| how much | acre-feet from the source table, converted to m³, all on that one cell | the source table |
-| how long | 10 model minutes, a result written every 10 s | fixed |
-| stop slope | 8, 10, 12, 15, 18, 20 or 25 degrees | set by hand, one per run |
-| pile angle | 35 by hand, or from the soil: sandy loam 31, loam 29 | soil survey texture, via a standard table |
-| water share | one of four ways, below | share of the moving mass that is water |
-| density | soil grains 2650 kg/m³, water 1000 | fixed. Runs before 29 Oct 2026 used 2000 |
-
-The four ways a run gets its water share. The run name says which:
-
-| run name ends in | water share | how |
-|---|---|---|
-| `_dry`, `_pile20` and so on | 0 | no water |
-| `_water25`, `_water50`, `_water75` | 0.25, 0.50, 0.75 | set by hand |
-| `_soilsat` | slide 8: 0.19 | the soil survey's saturated water content, soil completely full |
-| `_rain5in_k1` and so on | computed | the storm formula, below |
-
-The storm formula, for a storm of R inches in 24 hours:
-
-| step | formula | slide 8, 7 inch storm |
-|---|---|---|
-| water in the soil | the smaller of: saturated, or field capacity + R / 1.5 m | 0.19 (full) |
-| rain left over | R minus the rain to saturate (4.3 in for slide 8), or 0 | 2.7 in |
-| water share for the run | water in soil + k × (rain left over / 1.5 m) | k=1: 0.24, k=3: 0.33 |
-
-k is the one assumed number: the stream water the slide collects on its way down
-the hollow, as a multiple of the leftover rain depth over its own footprint. 0 none,
-1 once, 3 three times. Runs use 1 and 3 to see whether it matters.
-
-What every run reports: ground covered in m² (cells where the material got deeper
-than 1 cm), farthest reach in metres from the start point, and the deepest it got.
-
-## Settings, in plain words
+Requirements: GRASS GIS 8.4 at `/Applications/GRASS-8.4.app`, r.avaflow 4.0G built by
+`install_avaflow.sh`, and a Python with `numpy rasterio fiona shapely pyproj
+matplotlib`. The two source geopackages go in `inputs/` and are not kept in version
+control. Each r.avaflow run takes two to three minutes.
 
 All settings are at the top of `avaflow_run.py`. The list `RUNS` holds one entry per
-run; each slide is run once per entry.
+run; run names say the settings: `stopslope15_soilsat_entrain_storm5in` is stop slope
+15, pile angle and water share from the saturated soil, entrainment on, 5 inch
+storm. A full account of every r.avaflow input, in plain language, is in
+`docs/r_avaflow_inputs.md`.
 
-**Stop slope** (r.avaflow calls it the basal friction angle). How much grip there is
-between the bottom of the slide and the ground, written as the ground slope at which
-the two balance. Steeper than that, the material keeps moving; flatter than that,
-it drags and stops. 20 is stiff, dry, rocky material that stops on a hillside. 10 is
-soupy material that runs on down to gentle ground. Nothing measures this directly;
-it is set by matching the model to past slides whose deposits were mapped. This is
-the setting that matters most.
+## References
 
-**Water share.** How much of the released volume is water (0.25 = a quarter). The
-dry runs have none. With water, r.avaflow runs its two-material model: the ground
-part keeps the stop slope and pile angle, the water part has no grip of its own and
-flows like water, dragging the ground along. More water means it runs much farther
-and thins out. The soil lookup sets this to how much water the soil holds when
-soaked (its pore space), which is a fair guess for slides that let go in a storm.
+Das, B. M. (2010). *Principles of Geotechnical Engineering*, 7th ed. Cengage. Typical
+friction angles by soil type.
 
-**Pile angle** (r.avaflow: internal friction angle). The steepest slope a loose pile
-of the material can stand at on its own. Dry gravel holds a steep cone; wet soil
-slumps flat. The soil lookup sets it from the soil's texture. In the slide 8 tests
-it made no difference at all, because the hollow the slide runs in holds it in.
+Hungr, O., McDougall, S., and Bovis, M. (2005). Entrainment of material by debris
+flows. In Jakob, M. and Hungr, O. (eds), *Debris-flow Hazards and Related
+Phenomena*, Springer, 135–158.
 
-The run names say the settings: `stopslope<deg>_<water>`. Anything not named is at
-the standard value, pile angle 35, no water:
+Iverson, R. M. (1997). The physics of debris flows. *Reviews of Geophysics*, 35(3),
+245–296.
 
-| run name | stop slope | pile angle | water share |
-|---|---|---|---|
-| `stopslope20_dry`, `stopslope15_dry`, `stopslope10_dry` | 20 / 15 / 10 | 35 | none |
-| `stopslope15_water0` ... `stopslope15_water75` | 15 | 35 | 0, 25, 50, 75 % by hand |
-| `stopslope15_pile15` ... `stopslope15_pile40` | 15 | 15 ... 40 | none |
-| `stopslope25_soilsat` ... `stopslope8_soilsat` | 25 / 20 / 18 / 15 / 12 / 10 / 8 | from the soil | saturated soil |
-| `stopslope15_rain0in` ... `stopslope15_rain4in` | 15 | from the soil | soil after that much rain |
-| `stopslope<deg>_rain<N>in_k<K>` | 25 ... 8 | from the soil | saturated soil plus channel water, pickup K |
+Mergili, M., Fischer, J.-T., Krenn, J., and Pudasaini, S. P. (2017). r.avaflow v1, an
+advanced open-source computational framework for the propagation and interaction of
+two-phase mass flows. *Geoscientific Model Development*, 10, 553–569.
 
-## How rain becomes water share
+Mergili, M., Jaboyedoff, M., Pullarello, J., and Pudasaini, S. P. (2020). Back
+calculation of the 2017 Piz Cengalo–Bondo landslide cascade with r.avaflow: what we
+can do and what we can learn. *Natural Hazards and Earth System Sciences*, 20,
+505–520.
 
-r.avaflow has no rain input, so a storm total has to be turned into a water share.
-The soil survey gives three water contents for each soil, averaged over the top 1.5 m:
-**saturated** (every pore full), **field capacity** (two days after soaking, once the
-big pores drain; the normal wet-season state) and **wilting point** (the dry-summer
-floor). `lookup_soils.py` writes all three. The formula is a one-column bucket, filled
-from the top, starting at field capacity:
+Mergili, M. and Pudasaini, S. P. r.avaflow: the mass flow simulation tool.
+https://www.landslidemodels.org/r.avaflow/ (software and manual, version 4.0G).
 
-```
-water in soil after the storm   theta  = min( saturated , field_capacity + rain / 1.5 m )
-rain that saturates the column  P_sat  = ( saturated - field_capacity ) x 1.5 m
-rain left over, runs off        excess = max( 0 , rain - P_sat )
-water share used in the model   theta + pickup x excess / 1.5 m
-```
+Pudasaini, S. P. (2012). A general two-phase debris flow model. *Journal of
+Geophysical Research: Earth Surface*, 117, F03010.
 
-`pickup` is how many times the leftover rain depth, over the slide's own footprint,
-the flow collects from the hollow on its way down. It is an assumption, not a
-measurement; runs use 1 and 3 to see whether it matters. For slide 8 (saturated 19 %,
-field capacity 12 %) the column saturates at 4.3 inches, close to the NCGS trigger
-threshold of about 5 inches in 24 hours. Every `_soilsat` run is therefore the
-"4.3 inches or more" storm; below that the soil is drier, above it only channel water
-adds more. Full reasoning and what the formula leaves out:
-`docs/slide8_storm_test_plan.md`.
+Pudasaini, S. P. and Fischer, J.-T. (2020). A mechanical erosion model for two-phase
+mass flows. *International Journal of Multiphase Flow*, 132, 103416.
 
-Other things fixed in the script: 10 m cells, a 3 km box, density 2650 kg/m³ for the
-ground material, 10 model minutes, ground counts as covered when the material got
-deeper than 1 cm (`DEPOSIT_CUT`).
+Pudasaini, S. P. and Mergili, M. (2019). A multi-phase mass flow model. *Journal of
+Geophysical Research: Earth Surface*, 124, 2920–2942.
 
-## Outputs
+USDA Natural Resources Conservation Service (1986). *Urban Hydrology for Small
+Watersheds*, Technical Release 55. Rainfall distributions, Type II.
 
-Each slide's geopackage has one layer per run, named `deposit_<run>`. The layer is
-all the ground the material covered from the point to where it stopped, in bands by
-how deep it got (1 to 5 cm, 5 to 20 cm, 20 to 50 cm, 50 cm to 1 m, over 1 m). Every
-feature carries the settings so a layer can always be traced:
+USDA Natural Resources Conservation Service. Soil Survey Geographic Database
+(SSURGO) and Soil Data Access web service. https://sdmdataaccess.sc.egov.usda.gov/
 
-`source_fid`, `slide_id`, `run`, `stop_slope_deg`, `internal_friction_deg` (the pile
-angle), `water_share`, `settings_from` ("set by hand", or the soil the values came
-from with its SSURGO map unit), `band_m`, `max_depth_m`, `area_m2`, `volume_m3`.
+U.S. Geological Survey. 3D Elevation Program, 1/3 arc-second DEM.
+https://www.usgs.gov/3d-elevation-program
 
-The summary has one row per slide and run with the same settings plus
-`deposit_area_m2`, `deposit_max_depth_m`, `deposit_farthest_m` (how far from the
-point it reached) and `resting_thickest_m`.
+Wooten, R. M., Gillon, K. A., Witt, A. C., Latham, R. S., Douglas, T. J., Bauer,
+J. B., Fuemmeler, S. J., and Lee, L. G. (2008). Geologic, geomorphic, and
+meteorological aspects of debris flows triggered by Hurricanes Frances and Ivan
+during September 2004 in the Southern Appalachian Mountains of Macon County, North
+Carolina (southeastern USA). *Landslides*, 5, 31–44.
 
-## What the tests on slide 8 showed (October 2026)
-
-Slide 8 (fid 8) sits on the Toecane bouldery sandy loam. All 20 slides have the three
-dry runs; the rest were run on slide 8 only.
-
-| run | ground covered m² | farthest m | widest m |
-|---|---|---|---|
-| slope20 (dry) | 30,100 | 233 | 156 |
-| slope15 (dry) | 44,300 | 400 | 180 |
-| slope10 (dry) | 60,000 | 603 | 152 |
-| slope15, quarter water | 111,900 | 1,030 | 256 |
-| slope15, half water | 165,700 | 1,475 | 266 |
-| slope15, three-quarter water | 300,800 | 1,565 | 472 |
-| slope15, pile angle 15 to 40 | 44,000 to 44,600 | 400 | 180 |
-| slope20, soil (pile 31, water 0.19) | 76,200 | 718 | 180 |
-| slope15, soil | 105,900 | 1,001 | 246 |
-| slope10, soil | 185,900 | 1,489 | 303 |
-
-Stop slope sweep with the soil settings (pile angle 31, water 19 %), 29 October 2026.
-The four new levels bracket what slides do in western North Carolina: 25 is stiff dry
-rocky soil that stops on the hillside, 18 a slide that reaches the hollow, 12 a
-typical channelized debris flow, 8 a very mobile saturated flow with long runout.
-
-| stop slope | ground covered m² | farthest m |
-|---|---|---|
-| 25 | 54,700 | 504 |
-| 20 | 76,200 | 718 |
-| 18 | 84,900 | 850 |
-| 15 | 105,900 | 1,001 |
-| 12 | 152,400 | 1,358 |
-| 10 | 185,900 | 1,490 |
-| 8 | 246,800 | 1,552 |
-
-Area roughly doubles between 18 and 10, and again from 12 to 8. The 10 and 8 runs
-reach the edge of the 3 km box, so their real runout is longer than shown.
-
-### Storm test, 29 October 2026
-
-Water share from the storm formula (see "All settings on one page"), stop slope 15,
-pile angle 31 from the soil. Slide 8's soil saturates at 4.3 inches.
-
-| run | storm | k | water share | ground covered m² | farthest m |
-|---|---|---|---|---|---|
-| `stopslope15_dry` | none, no water | | 0 | 44,300 | 400 |
-| `stopslope15_rain0in` | none, wet-season soil | | 0.12 | 98,600 | 969 |
-| `stopslope15_rain2in` | 2 in | | 0.15 | 102,400 | 986 |
-| `stopslope15_rain3in` | 3 in | | 0.17 | 104,600 | 991 |
-| `stopslope15_rain4in` | 4 in | | 0.19 | 107,100 | 1,001 |
-| `stopslope15_soilsat` | 4.3 in and up, soil full | | 0.19 | 105,900 | 1,001 |
-| `stopslope15_rain5in_k1` | 5 in | 1 | 0.20 | 108,100 | 1,008 |
-| `stopslope15_rain7in_k1` | 7 in | 1 | 0.24 | 110,600 | 1,020 |
-| `stopslope15_rain10in_k1` | 10 in | 1 | 0.29 | 116,400 | 1,076 |
-| `stopslope15_rain5in_k3` | 5 in | 3 | 0.23 | 110,300 | 1,020 |
-| `stopslope15_rain7in_k3` | 7 in | 3 | 0.33 | 122,700 | 1,130 |
-| `stopslope15_rain10in_k3` | 10 in | 3 | 0.48 | 160,400 | 1,455 |
-
-The same 7 inch, k=3 storm at the other stop slopes, beside the saturated soil run:
-
-| stop slope | soil full (0.19) m² | 7 in, k=3 (0.33) m² | change |
-|---|---|---|---|
-| 25 | 54,700 | 55,200 | +1 % |
-| 18 | 84,900 | 96,400 | +14 % |
-| 15 | 105,900 | 122,700 | +16 % |
-| 12 | 152,400 | 180,800 | +19 % |
-| 8 | 246,800 | 270,400 | +10 %, at the box edge |
-
-What it shows:
-
-- **Any water at all is the big step.** Dry to normal wet-season soil (12 % water)
-  more than doubles the ground covered, 44,300 to 98,600 m². This is the model
-  switching from a sliding mass to a slurry.
-- **How wet the soil is hardly matters.** From wet-season soil to fully saturated,
-  0 to 4 inches of rain, adds 9 %. The soil can only hold so much.
-- **Storm size above saturation matters only through channel water.** At k=1, 5 to
-  10 inches adds 8 %. At k=3 it adds 45 %, and the 10 inch run nears the box edge.
-  Everything hangs on k, which is assumed.
-- **The stop slope still dominates.** It moves the footprint four to five fold
-  (55,000 to 270,000 m²). The biggest storm tested moves it 10 to 20 % at any given
-  stop slope. Calibrating the stop slope against a mapped real slide remains the
-  priority. The value of k comes second, and only matters for storms well past the
-  trigger threshold.
-
-- The stop slope and the water share decide the result. The pile angle does not.
-- Water mostly makes it run farther, not wider. Width only picks up at the far end
-  where the ground flattens.
-- Runs that reach about 1,500 m hit the edge of the 3 km box and would go farther.
-  `HALF_BOX_M` sets the box.
-- The dry runs are repeatable: `slope15` and `slope15_water0` are the same.
-
-## Soil lookup
-
-`lookup_soils.py` asks the USDA Soil Data Access service for the soil map unit under
-each point, takes its main soil, averages the layers down to 1.5 m, and writes:
-texture class and the pile angle it implies (standard engineering table), and the
-water share from the soil's saturated water content (or from bulk density when that
-is missing). Of the 20 slides, 17 are on sandy loams (pile angle 31) and 3 on loams
-(29). Water share is 0.32 to 0.37 except on the very bouldery Toecane soil (five
-slides, including 8), where it is 0.19.
-
-## Open questions
-
-- The stop slope still has to be chosen. Matching against mapped deposits of past
-  slides (the NC Geological Survey's Helene and 2004 inventories) is the way to
-  settle it.
-- The wet runs could also pick up ground and stream water on the way down
-  (r.avaflow's entrainment), which is not turned on.
-- The 2.5 ft height in the source table is not used; the volume comes from `acrefeet`.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Wooten, R. M., Witt, A. C., Miniat, C. F., Hales, T. C., and Aldred, J. L. (2016).
+Frequency and magnitude of selected historical landslide events in the Southern
+Appalachian Highlands of North Carolina and Virginia: relationships to rainfall,
+geological and ecohydrological controls, and effects. In Greenberg, C. H. and
+Collins, B. S. (eds), *Natural Disturbances and Historic Range of Variation*,
+Springer, 203–262.
