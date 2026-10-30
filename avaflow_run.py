@@ -84,7 +84,7 @@ D = {"fluid": 0.0, "density": 2650, "time": "10,600"}   # fluid friction, kg/m3,
 # from the soil survey's soil depth, how easily from ENTRAIN_LOG10 below).
 # Crossed: the stop slope at four levels, and the storm (none, or runoff from a 24 hour
 # rainfall of that many inches flowing in at the release point, see storm_inflow).
-STOP_SLOPES = (5, 10, 15, 20)
+STOP_SLOPES = (5, 10, 15, 20, 25, 30)
 STORMS_IN = (None, 5, 10)
 # how much lets go: None = the volume in the source table (its acre-feet column, which
 # works out to 0.071 m over each polygon: the 2.5 ft it was meant to be, with square
