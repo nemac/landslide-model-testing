@@ -6,7 +6,11 @@
     <title>Landslide runout viewer</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.css" />
     <style>
-      html, body, #root { height: 100%; margin: 0; font-family: Roboto, Helvetica, Arial, sans-serif; }
+      /* Montserrat, bundled from Google Fonts (OFL licence in fonts/OFL.txt) so it works offline and on GitHub Pages */
+      @font-face { font-family: "Montserrat"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("./fonts/Montserrat-Variable.ttf") format("truetype"); }
+      @font-face { font-family: "Montserrat"; font-style: italic; font-weight: 100 900; font-display: swap; src: url("./fonts/Montserrat-Italic-Variable.ttf") format("truetype"); }
+      html, body, #root { height: 100%; margin: 0; font-family: Montserrat, Helvetica, Arial, sans-serif; }
+      .maplibregl-ctrl, .maplibregl-popup, .recharts-wrapper { font-family: Montserrat, Helvetica, Arial, sans-serif; }
     </style>
   </head>
   <body>

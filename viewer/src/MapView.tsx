@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl, { Map, MapMouseEvent } from "maplibre-gl";
 import { Protocol } from "pmtiles";
-import { ARRIVAL_BINS, BASEMAPS, BasemapKey, DEPTH_BANDS, LayerId, Slide } from "./config";
+import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, LayerId, ROAD_COLOR, Slide } from "./config";
 
 const CLICKABLE = ["deposit-fill", "arrival-fill", "hydrograph-pt", "sources-fill", "points-pt"];
 const RUN_LAYERS = ["deposit-fill", "arrival-fill", "deposit-3d", "arrival-3d", "hydrograph-pt"];
@@ -36,10 +36,11 @@ interface Props {
   visible: Record<LayerId, boolean>;
   slides: Slide[];
   version: string;               // data build stamp, so a new tile file is not served from the browser cache
+  hits: { buildings: GeoJSON.FeatureCollection; roads: GeoJSON.FeatureCollection } | null;   // the Overture features the stats counted
   onPick: (fid: number) => void;
 }
 
-export default function MapView({ run, fid, basemap, visible, slides, version, onPick }: Props) {
+export default function MapView({ run, fid, basemap, visible, slides, version, hits, onPick }: Props) {
   const TILES = new URL(`data/landslides.pmtiles?v=${version}`, document.baseURI).href;
   const INVENTORY = new URL("data/nc_landslide_inventory.pmtiles", document.baseURI).href;
   const div = useRef<HTMLDivElement>(null);
@@ -70,6 +71,8 @@ export default function MapView({ run, fid, basemap, visible, slides, version, o
           ...baseSources,
           slides: { type: "vector", url: `pmtiles://${TILES}` },
           inventory: { type: "vector", url: `pmtiles://${INVENTORY}`, attribution: "NC Geological Survey landslide inventory" },
+          "hit-buildings": { type: "geojson", data: { type: "FeatureCollection", features: [] }, attribution: "© Overture Maps Foundation" },
+          "hit-roads": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
           // elevation tiles for 3D terrain when the map is tilted (AWS Terrarium, open data)
           "terrain-dem": { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 15 },
         },
@@ -111,6 +114,9 @@ export default function MapView({ run, fid, basemap, visible, slides, version, o
               "fill-extrusion-opacity": 0.9,
             },
           },
+          // the Overture buildings and roads the stats counted, nothing else
+          { id: "hit-buildings", type: "fill", source: "hit-buildings", paint: { "fill-color": BUILDING_COLOR, "fill-opacity": 0.95, "fill-outline-color": "#8c6d1f" } },
+          { id: "hit-roads", type: "line", source: "hit-roads", paint: { "line-color": ROAD_COLOR, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 2, 16, 5] } },
           { id: "sources-fill", type: "fill", source: "slides", "source-layer": "sources", paint: { "fill-color": "#1b9e77", "fill-opacity": 0.25 } },
           { id: "sources-line", type: "line", source: "slides", "source-layer": "sources", paint: { "line-color": "#1b9e77", "line-width": 1.5 } },
           { id: "points-pt", type: "circle", source: "slides", "source-layer": "points", paint: { "circle-radius": 5, "circle-color": "#1b9e77", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } },
@@ -149,6 +155,15 @@ export default function MapView({ run, fid, basemap, visible, slides, version, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // the counted features, whenever the stats change
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready.current) return;
+    const empty = { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection;
+    (m.getSource("hit-buildings") as any)?.setData(hits?.buildings ?? empty);
+    (m.getSource("hit-roads") as any)?.setData(hits?.roads ?? empty);
+  }, [hits]);
+
   // zoom to the chosen slide, or to all of them
   const zoom = (m: Map) => {
     if (!slides.length) return;
@@ -184,6 +199,8 @@ export default function MapView({ run, fid, basemap, visible, slides, version, o
     show(["sources-fill", "sources-line"], visible.sources);
     show(["points-pt"], visible.points);
     show(["inventory-fill", "inventory-line"], visible.inventory);
+    show(["hit-buildings"], visible.buildings);
+    show(["hit-roads"], visible.roads);
   };
   useEffect(() => {
     if (map.current && ready.current) apply(map.current);

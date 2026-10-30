@@ -51,7 +51,11 @@ export const LAYERS = [
   { id: "sources", label: "Source areas" },
   { id: "points", label: "Release points" },
   { id: "inventory", label: "NC landslide inventory (NCGS)" },
+  { id: "buildings", label: "Buildings touched (Overture)" },
+  { id: "roads", label: "Roads touched (Overture)" },
 ] as const;
+export const BUILDING_COLOR = "#fff7bc";
+export const ROAD_COLOR = "#d95f0e";
 export type LayerId = (typeof LAYERS)[number]["id"];
 
 export interface Slide {

@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import MapView from "./MapView";
 import { CompareCharts, ReviewCharts, SlideCharts } from "./Charts";
+import { Impacts, countImpacts, latestOvertureRelease } from "./overture";
 import { ARRIVAL_BINS, BASEMAPS, BasemapKey, DEPTH_BANDS, Index, LAYERS, LayerId, describeRun } from "./config";
 
 const LEFT = 320;
@@ -20,9 +21,11 @@ export default function App() {
   const [storm, setStorm] = useState("none");
   const [slideSel, setSlideSel] = useState<string>(String(DEFAULT_FID));   // a fid as text, or "all"
   const [basemap, setBasemap] = useState<BasemapKey>("darkgray");
-  const [visible, setVisible] = useState<Record<LayerId, boolean>>({ deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true });
+  const [visible, setVisible] = useState<Record<LayerId, boolean>>({ deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true });
   const [picked, setPicked] = useState<number | null>(DEFAULT_FID);   // charts open from the start
   const [chartData, setChartData] = useState<Record<string, SlideCharts>>({});
+  const [release, setRelease] = useState<string | null>(null);
+  const [impacts, setImpacts] = useState<Impacts | "counting" | null>(null);
 
   useEffect(() => {
     fetch(new URL(`data/index.json?t=${Date.now()}`, document.baseURI).href, { cache: "no-store" })
@@ -31,6 +34,7 @@ export default function App() {
         setIndex(ix);
         if (!ix.slides.some((s) => s.fid === DEFAULT_FID)) setSlideSel(ALL);
       });
+    latestOvertureRelease().then(setRelease);
     fetch(new URL(`data/charts.json?t=${Date.now()}`, document.baseURI).href, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : {}))
       .then(setChartData)
@@ -49,6 +53,18 @@ export default function App() {
   const runExists = !!index?.runs.includes(run);
   const slide = useMemo(() => index?.slides.find((s) => s.fid === picked) ?? null, [index, picked]);
   const row = useMemo(() => index?.summary.find((r) => r.slide_id === slide?.id && r.run === run) ?? null, [index, slide, run]);
+
+  // buildings and roads touched by the chosen run of the chosen slide, from Overture's tiles
+  useEffect(() => {
+    if (!index || !release || fid == null || !runExists) { setImpacts(null); return; }
+    const s = index.slides.find((x) => x.fid === fid);
+    if (!s) { setImpacts(null); return; }
+    let live = true;
+    setImpacts("counting");
+    const tiles = new URL(`data/landslides.pmtiles?v=${index.built ?? ""}`, document.baseURI).href;
+    countImpacts(tiles, release, s.lon, s.lat, run, fid).then((r) => { if (live) setImpacts(r); }).catch(() => { if (live) setImpacts(null); });
+    return () => { live = false; };
+  }, [index, release, fid, run, runExists]);
 
   // the charts follow the run chosen on the left; the comparison of every run sits below
   const sc = slide ? chartData[slide.id] : undefined;
@@ -117,7 +133,25 @@ export default function App() {
       </Drawer>
 
       <Box sx={{ position: "relative", flex: 1 }}>
-        {index && <MapView run={run} fid={fid} basemap={basemap} visible={visible} slides={index.slides} version={String(index.built ?? "")} onPick={setPicked} />}
+        {index && <MapView run={run} fid={fid} basemap={basemap} visible={visible} slides={index.slides} version={String(index.built ?? "")} hits={typeof impacts === "object" && impacts ? { buildings: { type: "FeatureCollection", features: impacts.buildingFeatures }, roads: { type: "FeatureCollection", features: impacts.roadFeatures } } : null} onPick={setPicked} />}
+        {/* bottom panel: what the chosen run touches */}
+        <Box sx={{ position: "absolute", left: 12, right: 12, bottom: 44, bgcolor: "rgba(250,250,250,0.95)", borderRadius: 1.5, p: 2, boxShadow: 3 }}>
+          {fid == null ? (
+            <Typography variant="body2" color="text.secondary">Pick one landslide to count the buildings and roads its deposit touches.</Typography>
+          ) : impacts === "counting" || impacts === null ? (
+            <Typography variant="body2" color="text.secondary">{impacts === "counting" ? "Counting buildings and roads in the deposit…" : runExists ? "Counts unavailable." : "Not run yet."}</Typography>
+          ) : (
+            <Stack direction="row" spacing={2} alignItems="stretch" flexWrap="wrap" useFlexGap>
+              <Stat label="buildings touched" value={impacts.buildings} />
+              <Stat label="road segments touched" value={impacts.roads} sub={Object.entries(impacts.roadsByClass).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`)} />
+              <Stat label="road length in the deposit" value={`${impacts.roadLengthM.toLocaleString()} m`} />
+              <Stat label="deposit footprint" value={`${impacts.footprintM2.toLocaleString()} m²`} />
+            </Stack>
+          )}
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+            Buildings and roads: Overture Maps Foundation, release {release ? release.slice(0, 10) : "…"}
+          </Typography>
+        </Box>
       </Box>
 
       <Box sx={{ width: slide ? RIGHT : 0, flexShrink: 0, p: slide ? 2 : 0, boxSizing: "border-box", overflowY: "auto", borderLeft: slide ? "1px solid #ddd" : "none", bgcolor: "background.paper" }}>
@@ -148,6 +182,22 @@ export default function App() {
         )}
       </Box>
     </Box>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: number | string; sub?: string[] }) {
+  return (
+    <Stack direction="row" spacing={1.5} alignItems="flex-end" sx={{ border: "1px solid #ddd", borderRadius: 1.5, px: 2, py: 1.25, bgcolor: "#fff", minWidth: 170 }}>
+      <Box>
+        <Typography sx={{ fontSize: 60, lineHeight: 1, fontWeight: 800 }}>{typeof value === "number" ? value.toLocaleString() : value}</Typography>
+        <Typography variant="caption" color="text.secondary">{label}</Typography>
+      </Box>
+      {sub && sub.length > 0 && (
+        <Box sx={{ pb: 2.5 }}>
+          {sub.map((line) => <Typography key={line} variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.35 }}>{line}</Typography>)}
+        </Box>
+      )}
+    </Stack>
   );
 }
 

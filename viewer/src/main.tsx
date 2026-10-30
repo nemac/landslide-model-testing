@@ -3,7 +3,10 @@ import ReactDOM from "react-dom/client";
 import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import App from "./App";
 
-const theme = createTheme({ palette: { mode: "light" } });
+const theme = createTheme({
+  palette: { mode: "light" },
+  typography: { fontFamily: "Montserrat, Helvetica, Arial, sans-serif" },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
