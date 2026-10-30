@@ -19,6 +19,7 @@ export default function App() {
   const [index, setIndex] = useState<Index | null>(null);
   const [stopSlope, setStopSlope] = useState("15");
   const [storm, setStorm] = useState("none");
+  const [depth, setDepth] = useState("table");
   const [slideSel, setSlideSel] = useState<string>(String(DEFAULT_FID));   // a fid as text, or "all"
   const [basemap, setBasemap] = useState<BasemapKey>("darkgray");
   const [visible, setVisible] = useState<Record<LayerId, boolean>>({ deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true });
@@ -49,7 +50,8 @@ export default function App() {
   const storms = useMemo(() => ["none", ...(index?.storms_in?.length
     ? index.storms_in.map(String)
     : Array.from(new Set((index?.runs ?? []).map((r) => r.match(/storm(\d+)in/)?.[1]).filter(Boolean) as string[])).sort((a, b) => +a - +b))], [index]);
-  const run = `stopslope${stopSlope}_soilsat_entrain${storm === "none" ? "" : `_storm${storm}in`}`;
+  const depths = useMemo(() => ["table", ...(index?.depths_m ?? []).map(String)], [index]);
+  const run = `stopslope${stopSlope}_soilsat_entrain${storm === "none" ? "" : `_storm${storm}in`}${depth === "table" ? "" : `_depth${Math.round(Number(depth) * 100)}cm`}`;
   const runExists = !!index?.runs.includes(run);
   const slide = useMemo(() => index?.slides.find((s) => s.fid === picked) ?? null, [index, picked]);
   const row = useMemo(() => index?.summary.find((r) => r.slide_id === slide?.id && r.run === run) ?? null, [index, slide, run]);
@@ -88,6 +90,10 @@ export default function App() {
 
         <Divider sx={{ my: 2 }} />
         <Typography variant="subtitle2">Model run</Typography>
+        <Typography variant="caption" color="text.secondary">Release depth over the source area</Typography>
+        <RadioGroup row value={depth} onChange={(e) => setDepth(e.target.value)}>
+          {depths.map((d) => <FormControlLabel key={d} value={d} control={<Radio size="small" />} label={<Typography variant="body2">{d === "table" ? "table (0.07 m)" : `${d} m`}</Typography>} />)}
+        </RadioGroup>
         <Typography variant="caption" color="text.secondary">Stop slope</Typography>
         <RadioGroup row value={stopSlope} onChange={(e) => setStopSlope(e.target.value)}>
           {stopSlopes.map((s) => <FormControlLabel key={s} value={s} control={<Radio size="small" />} label={<Typography variant="body2">{s}°</Typography>} />)}

@@ -26,7 +26,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from avaflow_run import load_slides, CELL_M, DEPOSIT_BANDS, DEPOSIT_CUT, OUTPUTS, RUNDIR, INPUTS
+from avaflow_run import load_slides, release_volume, RUNS, CELL_M, DEPOSIT_BANDS, DEPOSIT_CUT, OUTPUTS, RUNDIR, INPUTS
+RUN_BY_NAME = {r["name"]: r for r in RUNS}
 
 PLOTS = os.path.join(OUTPUTS, "plots")
 BIN_M = 50.0                                  # distance step for the down-valley panels
@@ -114,6 +115,7 @@ def volumes(run_dir, pf):
 
 def review_figure(s, name, run_dir, path, dem_tr):
     pf = f"ls{s['fid']:02d}"
+    released = release_volume(s, RUN_BY_NAME.get(name, {}))
     h, tr = _read(os.path.join(run_dir, f"{s['id']}_{name}_hflow_max.tif"))
     tp = os.path.join(run_dir, f"{pf}_results", f"{pf}_ascii", f"{pf}_treach.asc")
     treach = _read(tp)[0] if os.path.exists(tp) else None
@@ -132,7 +134,7 @@ def review_figure(s, name, run_dir, path, dem_tr):
         if water.max() > 0:
             a.plot(t / 60, water, color="#2b6f8b", lw=2, label="water in motion")
         a.plot(t / 60, ground + water, color="k", lw=1, ls="--", label="total")
-        a.axhline(s["volume_m3"], color="grey", lw=0.8, ls=":", label=f"released {s['volume_m3']:,.0f} m³")
+        a.axhline(released, color="grey", lw=0.8, ls=":", label=f"released {released:,.0f} m³")
         if storm:
             a.plot(t / 60, storm["inflow_m3s"] * t, color="#2b6f8b", lw=1, ls=":",
                    label=f"storm runoff in, {storm['inflow_m3s']} m³/s")
@@ -188,6 +190,7 @@ def review_figure(s, name, run_dir, path, dem_tr):
         "profile": [{"dist_m": clean(m), "peak_m": clean(p), "first_s": clean(f)} for m, p, f in zip(*prof)] if prof else [],
         "bands": [{"label": l, "area_m2": a} for l, a in zip(labels, areas)],
         "storm": storm,
+        "released_m3": round(released, 1),
     }
     return out, prof, data
 

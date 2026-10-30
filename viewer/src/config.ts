@@ -71,6 +71,7 @@ export interface Index {
   runs: string[];                 // runs that have results
   stop_slopes?: number[];         // the full matrix, run or not
   storms_in?: number[];
+  depths_m?: number[];            // release depths offered besides the table volume
   summary: Record<string, string>[];
 }
 
@@ -86,5 +87,7 @@ export function describeRun(run: string): string {
   if (run.includes("entrain")) parts.push("entrainment");
   const s = run.match(/storm(\d+)in/);
   if (s) parts.push(`${s[1]} in storm`);
+  const d = run.match(/depth(\d+)cm/);
+  parts.push(d ? `release depth ${Number(d[1]) / 100} m` : "table volume");
   return parts.join(", ") || run;
 }

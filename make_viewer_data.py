@@ -25,7 +25,7 @@ from pyproj import Transformer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from avaflow_run import RUNS, STOP_SLOPES, STORMS_IN   # only the runs the project currently makes
+from avaflow_run import RUNS, STOP_SLOPES, STORMS_IN, RELEASE_DEPTHS_M   # only the runs the project currently makes
 ACTIVE_RUNS = {r["name"] for r in RUNS}
 OUTPUTS = os.path.join(HERE, "outputs")
 INPUTS = os.path.join(HERE, "inputs")
@@ -150,6 +150,7 @@ def main():
         import time
         json.dump({"built": int(time.time()), "slides": slides, "runs": [r["name"] for r in RUNS if r["name"] in runs],
                    "stop_slopes": list(STOP_SLOPES), "storms_in": [s for s in STORMS_IN if s],
+                   "depths_m": [d for d in RELEASE_DEPTHS_M if d],
                    "summary": summary}, f)
     print(f"index.json: {len(slides)} slides, {len(runs)} runs, {len(summary)} summary rows")
 

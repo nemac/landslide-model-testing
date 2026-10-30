@@ -86,11 +86,21 @@ D = {"fluid": 0.0, "density": 2650, "time": "10,600"}   # fluid friction, kg/m3,
 # rainfall of that many inches flowing in at the release point, see storm_inflow).
 STOP_SLOPES = (5, 10, 15, 20)
 STORMS_IN = (None, 5, 10)
+# how much lets go: None = the volume in the source table (its acre-feet column, which
+# works out to 0.071 m over each polygon: the 2.5 ft it was meant to be, with square
+# metres mistaken for square feet when converting to acres); or polygon area x this
+# depth in metres. The run name carries _depth<cm>cm for the latter.
+RELEASE_DEPTHS_M = (None, 0.4, 0.8, 1.0)
 RUNS = [
-    {"name": f"stopslope{ss}_soilsat_entrain" + (f"_storm{st}in" if st else ""),
-     "soil": True, "stop_slope": ss, "entrain": True, **({"storm_in": st} if st else {}), **D}
-    for ss in STOP_SLOPES for st in STORMS_IN
+    {"name": f"stopslope{ss}_soilsat_entrain" + (f"_storm{st}in" if st else "") + (f"_depth{round(dp * 100)}cm" if dp else ""),
+     "soil": True, "stop_slope": ss, "entrain": True, **({"storm_in": st} if st else {}), **({"depth_m": dp} if dp else {}), **D}
+    for dp in RELEASE_DEPTHS_M for ss in STOP_SLOPES for st in STORMS_IN
 ]
+
+
+def release_volume(s, run):
+    """The volume released in this run, m3: polygon area x depth when the run sets one, else the table's."""
+    return s["area_m2"] * run["depth_m"] if run.get("depth_m") else s["volume_m3"]
 WATER_DENSITY = 1000
 SOILS_CSV = os.path.join(OUTPUTS, "landslide_soils.csv")
 # entrainment coefficient, as a power of ten: -7 is effectively off, -6 ten times more
@@ -151,6 +161,8 @@ def run_settings(run, s):
             run["settings_from"] += f"; entrainment on, can dig {run['erodible_depth_m']:.2f} m (soil depth), coefficient 10^{ENTRAIN_LOG10:g}"
     if run.get("storm_in"):
         run["settings_from"] += f"; storm runoff from a {run['storm_in']:g} in / 24 h storm fed in at the point (see storm.json in the run folder)"
+    if run.get("depth_m"):
+        run["settings_from"] += f"; released volume = source area x {run['depth_m']:g} m"
     return run
 # -----------------------------------------------------------------------------
 
@@ -223,9 +235,11 @@ def _grid_ok(tif, nx):
         return False
 
 
-def make_inputs(s):
+def make_inputs(s, depth_m=None):
+    """The DEM (cut once) and the release raster for this volume (one file per release depth)."""
     d = os.path.join(INPUTS, s["id"]); os.makedirs(d, exist_ok=True)
-    dem_p, rel_p = os.path.join(d, "dem.tif"), os.path.join(d, "hrelease.tif")
+    dem_p = os.path.join(d, "dem.tif")
+    rel_p = os.path.join(d, f"hrelease_depth{round(depth_m * 100)}cm.tif" if depth_m else "hrelease.tif")
     left = math.floor((s["x"] - HALF_BOX_M) / CELL_M) * CELL_M
     bottom = math.floor((s["y"] - HALF_BOX_M) / CELL_M) * CELL_M
     right, top = left + 2 * HALF_BOX_M, bottom + 2 * HALF_BOX_M
@@ -248,7 +262,10 @@ def make_inputs(s):
         with rasterio.open(dem_p, "w", driver="GTiff", height=ny, width=nx, count=1, dtype="float32",
                            crs=CRS, transform=tr, nodata=-9999.0) as dst:
             dst.write(np.where(np.isfinite(dem), dem, -9999.0).astype(np.float32), 1)
-    vol = s["volume_m3"] if RELEASE_THICKNESS == "volume" else s["height_m"] * s["area_m2"]
+    if depth_m:
+        vol = s["area_m2"] * depth_m
+    else:
+        vol = s["volume_m3"] if RELEASE_THICKNESS == "volume" else s["height_m"] * s["area_m2"]
     if RELEASE_AT == "point":
         rel = np.zeros((ny, nx), np.float32)
         c, r = ~tr * (s["x"], s["y"])
@@ -269,7 +286,7 @@ def make_inputs(s):
 def run_slide(s, runs=RUNS, redo=False):
     dem_p, rel_p, thick, rel_area, (top, bottom, left, right) = make_inputs(s)
     nx = int(round(2 * HALF_BOX_M / CELL_M))
-    print(f"{s['id']} (fid {s['fid']}): {s['volume_m3']:,.0f} m³ released {'at the point' if RELEASE_AT == 'point' else 'over the source'}, "
+    print(f"{s['id']} (fid {s['fid']}): {s['volume_m3']:,.0f} m³ in the table, released {'at the point' if RELEASE_AT == 'point' else 'over the source'}, "
           f"{rel_area:,.0f} m², {thick:.2f} m thick", flush=True)
     ms = os.path.join(PROJECT, s["id"])
     if not os.path.isdir(ms):
@@ -278,10 +295,17 @@ def run_slide(s, runs=RUNS, redo=False):
     grass_exec(s["id"], "r.in.gdal", "--overwrite", "--quiet", f"input={rel_p}", "output=hrelease")
     grass_exec(s["id"], "g.region", "raster=dem")
     out = []
+    loaded_rel = rel_p
     for run in runs:
         run = run_settings(run, s)
         wd = os.path.join(RUNDIR, s["id"], run["name"]); os.makedirs(wd, exist_ok=True)
         pf = f"ls{s['fid']:02d}"
+        # the release raster for this run's volume, swapped into GRASS only when it changes
+        _, run_rel_p, _, _, _ = make_inputs(s, run.get("depth_m"))
+        if run_rel_p != loaded_rel:
+            grass_exec(s["id"], "r.in.gdal", "--overwrite", "--quiet", f"input={run_rel_p}", "output=hrelease")
+            grass_exec(s["id"], "g.region", "raster=dem")
+            loaded_rel = run_rel_p
         # already on disk for this box size: keep it (--redo forces a rerun)
         done_h = os.path.join(wd, f"{s['id']}_{run['name']}_hflow_max.tif")
         done_d = os.path.join(wd, f"{s['id']}_{run['name']}_deposit.tif")
@@ -508,9 +532,10 @@ def collect(s, results, summary):
                         "deposit_max_depth_m": round(float(h.max()), 3),
                         "deposit_farthest_m": round(_farthest(h, tr, s, DEPOSIT_CUT), 1),
                         "resting_thickest_m": round(float(d.max()), 3),
-                        "released_m3": round(s["volume_m3"], 1),
+                        "released_m3": round(release_volume(s, run), 1),
                         "entrained_m3": round(entrained, 1),
-                        "growth": round((s["volume_m3"] + entrained) / s["volume_m3"], 2),
+                        "growth": round((release_volume(s, run) + entrained) / release_volume(s, run), 2),
+                        "release_depth_m": run.get("depth_m", round(s["volume_m3"] / s["area_m2"], 3)),
                         "storm_in": storm.get("storm_in", 0),
                         "storm_water_m3": round(storm["inflow_m3s"] * int(run["time"].split(",")[1]), 1) if storm else 0})
     print(f"   -> {os.path.basename(gp)}", flush=True)
@@ -593,7 +618,7 @@ if __name__ == "__main__":
     sp = os.path.join(OUTPUTS, "landslide_avaflow_summary.csv")
     cols = ["source_fid", "slide_id", "run", "stop_slope_deg", "pile_angle_deg", "water_share", "settings_from",
             "deposit_area_m2", "deposit_max_depth_m", "deposit_farthest_m",
-            "resting_thickest_m", "released_m3", "entrained_m3", "growth", "storm_in", "storm_water_m3"]
+            "resting_thickest_m", "released_m3", "entrained_m3", "growth", "release_depth_m", "storm_in", "storm_water_m3"]
     fresh = {(r["slide_id"], r["run"]) for r in summary}
     old = []
     if os.path.exists(sp):

@@ -12,6 +12,7 @@ export interface RunData {
   profile: { dist_m: number; peak_m: number | null; first_s: number | null }[];
   bands: { label: string; area_m2: number }[];
   storm: { inflow_m3s: number; storm_in: number; catchment_m2?: number; peak_rain_in_per_h?: number } | null;
+  released_m3?: number;
 }
 export interface SlideCharts { fid: number; released_m3: number; runs: Record<string, RunData> }
 
@@ -30,7 +31,8 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 
 const fmt = (v: any) => (typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v);
 
-export function ReviewCharts({ data, released }: { data: RunData; released: number }) {
+export function ReviewCharts({ data, released: slideReleased }: { data: RunData; released: number }) {
+  const released = data.released_m3 ?? slideReleased;
   const vols = data.volumes.map((v) => ({ ...v, storm: data.storm ? +(data.storm.inflow_m3s * v.t_min * 60).toFixed(1) : undefined }));
   // the storm hydrograph fed in at the release point: a steady inflow for the whole run
   const q = data.storm?.inflow_m3s ?? 0;
