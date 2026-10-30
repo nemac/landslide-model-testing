@@ -349,6 +349,40 @@ def _bands_to_layer(gp, layer, h, tr, crs, bands, props, thick_name):
             dst.write(ft)
 
 
+ARRIVAL_BIN_MIN = 5          # arrival-time polygons: minutes after release, in bins this wide
+
+
+def _arrival_layer(gp, layer, treach_s, tr, crs, props):
+    """
+    One polygon per ARRIVAL_BIN_MIN-minute bin of when the material first reached each
+    cell, from r.avaflow's treach grid (seconds; cells never reached hold a huge value).
+    """
+    reached = np.isfinite(treach_s) & (treach_s >= 0) & (treach_s < 1e5)
+    if not reached.any():
+        return
+    minutes = np.where(reached, treach_s / 60.0, np.nan)
+    schema = {"geometry": "MultiPolygon",
+              "properties": dict({k: ("int" if isinstance(v, int) else "float" if isinstance(v, float) else "str") for k, v in props.items()},
+                                 arrival_min="str", first_min="float", area_m2="float")}
+    feats = []
+    top = int(np.ceil(np.nanmax(minutes) / ARRIVAL_BIN_MIN)) * ARRIVAL_BIN_MIN
+    for lo in range(0, max(top, ARRIVAL_BIN_MIN), ARRIVAL_BIN_MIN):
+        hi = lo + ARRIVAL_BIN_MIN
+        band = reached & (minutes >= lo) & (minutes < hi)
+        if not band.any():
+            continue
+        geoms = [shape(g) for g, v in features.shapes(band.astype(np.uint8), mask=band, transform=tr) if v == 1]
+        u = unary_union(geoms)
+        if u.geom_type == "Polygon":
+            u = MultiPolygon([u])
+        feats.append({"geometry": mapping(u),
+                      "properties": dict(props, arrival_min=f"{lo}-{hi}", first_min=round(float(np.nanmin(minutes[band])), 2),
+                                         area_m2=round(float(band.sum()) * CELL_M * CELL_M, 1))})
+    with fiona.open(gp, "w", driver="GPKG", layer=layer, schema=schema, crs=crs) as dst:
+        for ft in feats:
+            dst.write(ft)
+
+
 def _read(tif):
     with rasterio.open(tif) as src:
         h = src.read(1); tr = src.transform; crs = src.crs
@@ -382,6 +416,12 @@ def collect(s, results, summary):
         # where it stopped, banded by the deepest it got in each cell
         h, tr, crs = _read(htif)
         _bands_to_layer(gp, f"deposit_{run['name']}", h, tr, crs, DEPOSIT_BANDS, props, "max_depth_m")
+        # when the material first arrived, in 5 minute bins
+        pf = f"ls{s['fid']:02d}"
+        treach_p = os.path.join(os.path.dirname(htif), f"{pf}_results", f"{pf}_ascii", f"{pf}_treach.asc")
+        if os.path.exists(treach_p):
+            with rasterio.open(treach_p) as a:
+                _arrival_layer(gp, f"arrival_{run['name']}", a.read(1).astype("float64"), a.transform, crs, props)
         d, _, _ = _read(dtif)
         # the storm inflow point, if this run had one: where the runoff came in and how much
         storm = {}
