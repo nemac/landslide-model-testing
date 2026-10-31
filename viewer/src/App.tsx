@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Box, Checkbox, Divider, Drawer, FormControl, FormControlLabel, IconButton, InputLabel, Link, MenuItem,
   Radio, RadioGroup, Select, Stack, Typography,
@@ -8,22 +8,51 @@ import { CompareCharts, ReviewCharts, SlideCharts } from "./Charts";
 import { Impacts, countImpacts, latestOvertureRelease } from "./overture";
 import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index, LAYERS, LayerId, ROAD_COLOR, describeRun } from "./config";
 
-const LEFT = 320;
+const LEFT = 360;              // left panel default width; the user can drag it between the two below
+const MIN_LEFT = 280;
+const MAX_LEFT = 640;
 const RIGHT = 560;
 const ALL = "all";
 const DEFAULT_FID = 1;
 // blank charts for a run that has not been made yet
 const EMPTY = { volumes: [], profile: [], bands: ["1-5 cm", "5-20 cm", "20-50 cm", "50-100 cm", ">100 cm"].map((label) => ({ label, area_m2: 0 })), storm: null };
 
+// the left-panel settings live in the URL hash, so a link brings back the same view
+const DEFAULT_VISIBLE: Record<LayerId, boolean> = { deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true };
+const urlState = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+const fromUrl = (key: string, fallback: string) => urlState.get(key) ?? fallback;
+function visibleFromUrl(): Record<LayerId, boolean> {
+  const v = urlState.get("layers");
+  if (v == null) return DEFAULT_VISIBLE;
+  const on = new Set(v.split(",").filter(Boolean));
+  return Object.fromEntries(LAYERS.map((l) => [l.id, on.has(l.id)])) as Record<LayerId, boolean>;
+}
+
 export default function App() {
   const [index, setIndex] = useState<Index | null>(null);
-  const [stopSlope, setStopSlope] = useState("15");
-  const [storm, setStorm] = useState("none");
-  const [depth, setDepth] = useState("table");
-  const [slideSel, setSlideSel] = useState<string>(String(DEFAULT_FID));   // a fid as text, or "all"
-  const [basemap, setBasemap] = useState<BasemapKey>("darkgray");
-  const [visible, setVisible] = useState<Record<LayerId, boolean>>({ deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true });
-  const [picked, setPicked] = useState<number | null>(DEFAULT_FID);   // charts open from the start
+  const [stopSlope, setStopSlope] = useState(fromUrl("slope", "15"));
+  const [storm, setStorm] = useState(fromUrl("storm", "none"));
+  const [depth, setDepth] = useState(fromUrl("depth", "table"));
+  const [slideSel, setSlideSel] = useState<string>(fromUrl("slide", String(DEFAULT_FID)));   // a fid as text, or "all"
+  const [basemap, setBasemap] = useState<BasemapKey>((fromUrl("basemap", "darkgray") in BASEMAPS ? fromUrl("basemap", "darkgray") : "darkgray") as BasemapKey);
+  const [visible, setVisible] = useState<Record<LayerId, boolean>>(visibleFromUrl);
+  const [picked, setPicked] = useState<number | null>(slideSel === ALL ? null : Number(slideSel));   // charts open from the start
+  const [left, setLeft] = useState(() => Math.min(MAX_LEFT, Math.max(MIN_LEFT, Number(fromUrl("left", String(LEFT))) || LEFT)));   // left panel width, draggable
+
+  useEffect(() => {
+    const p = new URLSearchParams({ slide: slideSel, depth, slope: stopSlope, storm, basemap,
+      layers: LAYERS.filter((l) => visible[l.id]).map((l) => l.id).join(","), left: String(left) });
+    window.history.replaceState(null, "", `#${p.toString()}`);
+  }, [slideSel, depth, stopSlope, storm, basemap, visible, left]);
+
+  // drag the left panel's right edge to resize it
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const move = (ev: MouseEvent) => setLeft(Math.min(MAX_LEFT, Math.max(MIN_LEFT, ev.clientX)));
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
   const [chartData, setChartData] = useState<Record<string, SlideCharts>>({});
   const [release, setRelease] = useState<string | null>(null);
   const [impacts, setImpacts] = useState<Impacts | "counting" | null>(null);
@@ -33,7 +62,7 @@ export default function App() {
       .then((r) => r.json())
       .then((ix: Index) => {
         setIndex(ix);
-        if (!ix.slides.some((s) => s.fid === DEFAULT_FID)) setSlideSel(ALL);
+        if (slideSel !== ALL && !ix.slides.some((s) => s.fid === Number(slideSel))) { setSlideSel(ALL); setPicked(null); }
       });
     latestOvertureRelease().then(setRelease);
     fetch(new URL(`data/charts.json?t=${Date.now()}`, document.baseURI).href, { cache: "no-store" })
@@ -50,7 +79,10 @@ export default function App() {
   const storms = useMemo(() => ["none", ...(index?.storms_in?.length
     ? index.storms_in.map(String)
     : Array.from(new Set((index?.runs ?? []).map((r) => r.match(/storm(\d+)in/)?.[1]).filter(Boolean) as string[])).sort((a, b) => +a - +b))], [index]);
-  const depths = useMemo(() => ["table", ...(index?.depths_m ?? []).map(String)], [index]);
+  // the table volume is 0.07 m deep; it sits in order among the other depths
+  const TABLE_M = 0.07;
+  const depths = useMemo(() => ["table", ...(index?.depths_m ?? []).map(String)].sort((a, b) => (a === "table" ? TABLE_M : +a) - (b === "table" ? TABLE_M : +b)), [index]);
+  const depthLabel = (d: string) => `${String(d === "table" ? TABLE_M : Number(d)).replace(/^0\./, ".")} m`;
   const run = `stopslope${stopSlope}_soilsat_entrain${storm === "none" ? "" : `_storm${storm}in`}${depth === "table" ? "" : `_depth${Math.round(Number(depth) * 100)}cm`}`;
   const runExists = !!index?.runs.includes(run);
   const slide = useMemo(() => index?.slides.find((s) => s.fid === picked) ?? null, [index, picked]);
@@ -74,25 +106,28 @@ export default function App() {
 
   return (
     <Box sx={{ display: "flex", height: "100vh" }}>
-      <Drawer variant="permanent" sx={{ width: LEFT, flexShrink: 0, "& .MuiDrawer-paper": { width: LEFT, p: 2, boxSizing: "border-box" } }}>
+      <Drawer variant="permanent" sx={{ width: left, flexShrink: 0, "& .MuiDrawer-paper": { width: left, p: 2, boxSizing: "border-box", bgcolor: "#fafafa" } }}>
+        {/* drag handle on the panel's right edge */}
+        <Box onMouseDown={startDrag} sx={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 6, cursor: "col-resize", "&:hover": { bgcolor: "rgba(0,0,0,0.08)" } }} />
         <Typography variant="h6" gutterBottom>Landslide runout</Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom>
           r.avaflow runs for the western NC source areas. Click a deposit, point or source for its graphs.
         </Typography>
 
-        <FormControl fullWidth size="small" sx={{ mt: 2 }}>
-          <InputLabel>Landslide</InputLabel>
-          <Select label="Landslide" value={slideSel} onChange={(e) => { setSlideSel(e.target.value); if (e.target.value !== ALL) setPicked(Number(e.target.value)); }}>
-            <MenuItem value={ALL}>All landslides</MenuItem>
-            {index?.slides.map((s) => <MenuItem key={s.fid} value={String(s.fid)}>Landslide {s.fid} ({s.id})</MenuItem>)}
-          </Select>
-        </FormControl>
+        <Card>
+          <FormControl fullWidth size="small">
+            <InputLabel>Landslide</InputLabel>
+            <Select label="Landslide" value={slideSel} onChange={(e) => { setSlideSel(e.target.value); if (e.target.value !== ALL) setPicked(Number(e.target.value)); }}>
+              <MenuItem value={ALL}>All landslides</MenuItem>
+              {index?.slides.map((s) => <MenuItem key={s.fid} value={String(s.fid)}>Landslide {s.fid} ({s.id})</MenuItem>)}
+            </Select>
+          </FormControl>
+        </Card>
 
-        <Divider sx={{ my: 2 }} />
-        <Typography variant="subtitle2">Model run</Typography>
+        <Card title="Model run">
         <Typography variant="caption" color="text.secondary">Release depth over the source area</Typography>
         <RadioGroup row value={depth} onChange={(e) => setDepth(e.target.value)}>
-          {depths.map((d) => <FormControlLabel key={d} value={d} control={<Radio size="small" />} label={<Typography variant="body2">{d === "table" ? "table (0.07 m)" : `${d} m`}</Typography>} />)}
+          {depths.map((d) => <FormControlLabel key={d} value={d} control={<Radio size="small" />} label={<Typography variant="body2">{depthLabel(d)}</Typography>} />)}
         </RadioGroup>
         <Typography variant="caption" color="text.secondary">Stop slope</Typography>
         <RadioGroup row value={stopSlope} onChange={(e) => setStopSlope(e.target.value)}>
@@ -114,35 +149,37 @@ export default function App() {
         <Typography variant="body2" sx={{ mt: 1 }}>
           <Link href="https://github.com/nemac/landslide-model-testing#readme" target="_blank" rel="noopener">Methodology</Link>
         </Typography>
+        </Card>
 
-        <Divider sx={{ my: 2 }} />
-        <Typography variant="subtitle2">Layers</Typography>
+        <Card title="Layers">
         <Stack>
           {LAYERS.map((l) => (
             <FormControlLabel key={l.id} control={<Checkbox size="small" checked={visible[l.id]} onChange={(e) => setVisible({ ...visible, [l.id]: e.target.checked })} />} label={<Typography variant="body2">{l.label}</Typography>} />
           ))}
         </Stack>
+        </Card>
 
-        <Divider sx={{ my: 2 }} />
-        <Typography variant="subtitle2">Basemap</Typography>
+        <Card title="Basemap">
         <RadioGroup value={basemap} onChange={(e) => setBasemap(e.target.value as BasemapKey)}>
           {(Object.keys(BASEMAPS) as BasemapKey[]).map((k) => (
             <FormControlLabel key={k} value={k} control={<Radio size="small" />} label={<Typography variant="body2">{BASEMAPS[k].label}</Typography>} />
           ))}
         </RadioGroup>
+        </Card>
 
-        <Divider sx={{ my: 2 }} />
-        <Typography variant="subtitle2" gutterBottom>Peak depth</Typography>
-        {DEPTH_BANDS.map((b) => <Swatch key={b.band} color={b.color} label={b.label} />)}
-        <Typography variant="subtitle2" sx={{ mt: 1.5 }} gutterBottom>Arrival time</Typography>
-        {ARRIVAL_BINS.map((b) => <Swatch key={b.bin} color={b.color} label={b.label} />)}
-        <Typography variant="subtitle2" sx={{ mt: 1.5 }} gutterBottom>Other layers</Typography>
-        <Swatch color="rgba(27,158,119,0.35)" border="#1b9e77" label="Source area" />
+        <Card title="Legend">
+        {/* points, then lines, then polygons; the map's drawing order is unchanged */}
         <Swatch color="#1b9e77" label="Release point" shape="circle" />
         <Swatch color="#2b6f8b" label="Storm inflow point" shape="circle" />
-        <Swatch color="rgba(31,120,180,0.4)" border="#1f78b4" label="NCGS landslide inventory" />
-        <Swatch color={BUILDING_COLOR} border="#8c6d1f" label="Building touched (Overture)" />
         <Swatch color={ROAD_COLOR} label="Road touched (Overture)" shape="line" />
+        <Swatch color={BUILDING_COLOR} border="#8c6d1f" label="Building touched (Overture)" />
+        <Swatch color="rgba(27,158,119,0.35)" border="#1b9e77" label="Source area" />
+        <Swatch color="rgba(31,120,180,0.4)" border="#1f78b4" label="NCGS landslide inventory" />
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5, mb: 0.5 }}>Peak depth</Typography>
+        {DEPTH_BANDS.map((b) => <Swatch key={b.band} color={b.color} label={b.label} />)}
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5, mb: 0.5 }}>Arrival time</Typography>
+        {ARRIVAL_BINS.map((b) => <Swatch key={b.bin} color={b.color} label={b.label} />)}
+        </Card>
       </Drawer>
 
       <Box sx={{ position: "relative", flex: 1 }}>
@@ -194,6 +231,16 @@ export default function App() {
           </>
         )}
       </Box>
+    </Box>
+  );
+}
+
+// a left-panel section, boxed like the stats cards
+function Card({ title, children }: { title?: string; children: React.ReactNode }) {
+  return (
+    <Box sx={{ border: "1px solid #ddd", borderRadius: 1.5, px: 2, py: 1.5, bgcolor: "#fff", mt: 2 }}>
+      {title && <Typography variant="subtitle2" gutterBottom>{title}</Typography>}
+      {children}
     </Box>
   );
 }

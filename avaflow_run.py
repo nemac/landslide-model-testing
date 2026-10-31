@@ -90,7 +90,7 @@ STORMS_IN = (None, 5, 10)
 # works out to 0.071 m over each polygon: the 2.5 ft it was meant to be, with square
 # metres mistaken for square feet when converting to acres); or polygon area x this
 # depth in metres. The run name carries _depth<cm>cm for the latter.
-RELEASE_DEPTHS_M = (None, 0.4, 0.8, 1.0)
+RELEASE_DEPTHS_M = (None, 0.03, 0.05, 0.09)
 RUNS = [
     {"name": f"stopslope{ss}_soilsat_entrain" + (f"_storm{st}in" if st else "") + (f"_depth{round(dp * 100)}cm" if dp else ""),
      "soil": True, "stop_slope": ss, "entrain": True, **({"storm_in": st} if st else {}), **({"depth_m": dp} if dp else {}), **D}
