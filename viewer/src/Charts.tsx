@@ -1,11 +1,12 @@
 // The four review panels, drawn from charts.json, stacked vertically. Same colours as
 // the PNG figures made by avaflow_plots.py.
-import { Box, Typography } from "@mui/material";
+import { useState } from "react";
+import { Box, Button, Dialog, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { describeRun } from "./config";
+import { describeRun, shortRun } from "./config";
 
 export interface RunData {
   volumes: { t_min: number; ground: number | null; water: number | null; total: number | null }[];
@@ -30,6 +31,14 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 const fmt = (v: any) => (typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v);
+// hover box for the many-run charts: short run tags, numbers first, biggest at the top
+const compactTip = {
+  formatter: fmt,
+  itemSorter: (item: any) => -(item.value ?? 0),
+  contentStyle: { fontSize: 11, padding: "4px 8px", lineHeight: 1.3 },
+  itemStyle: { padding: 0 },
+  labelStyle: { fontWeight: 600, marginBottom: 2 },
+};
 
 export function ReviewCharts({ data, released: slideReleased }: { data: RunData; released: number }) {
   const released = data.released_m3 ?? slideReleased;
@@ -121,16 +130,35 @@ export function CompareCharts({ runs }: { runs: Record<string, RunData> }) {
     });
     return row;
   });
+  const color = (i: number) => PALETTE[i % PALETTE.length];
+  // the legend is long with many runs, so it lives in a popup instead of under the charts
+  const [legendOpen, setLegendOpen] = useState(false);
   return (
     <>
+      {names.length > 0 && (
+        <Button size="small" variant="outlined" onClick={() => setLegendOpen(true)} sx={{ mt: 1 }}>Legend ({names.length} runs)</Button>
+      )}
+      <Dialog open={legendOpen} onClose={() => setLegendOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Runs compared</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={0.5}>
+            {names.map((n, i) => (
+              <Stack key={n} direction="row" spacing={1.5} alignItems="center">
+                <Box sx={{ width: 28, height: 3, bgcolor: color(i), flexShrink: 0 }} />
+                <Typography variant="body2" sx={{ minWidth: 130, fontWeight: 600 }}>{shortRun(n)}</Typography>
+                <Typography variant="caption" color="text.secondary">{describeRun(n)}</Typography>
+              </Stack>
+            ))}
+          </Stack>
+        </DialogContent>
+      </Dialog>
       <Panel title="Peak depth, m">
         <LineChart data={rows} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
           <CartesianGrid strokeOpacity={0.3} />
           <XAxis dataKey="dist_m" type="number" label={{ value: "metres down the valley", position: "insideBottom", offset: -2, fontSize: 11 }} tick={{ fontSize: 11 }} />
           <YAxis domain={[0, "auto"]} tick={{ fontSize: 11 }} width={55} />
-          <Tooltip formatter={fmt} labelFormatter={(l) => `${l} m`} />
-          <Legend wrapperStyle={{ fontSize: 10 }} />
-          {names.map((n, i) => <Line key={n} type="monotone" dataKey={`${n}__peak`} name={describeRun(n)} stroke={PALETTE[i % PALETTE.length]} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
+          <Tooltip {...compactTip} labelFormatter={(l) => `${l} m down the valley`} />
+          {names.map((n, i) => <Line key={n} type="monotone" dataKey={`${n}__peak`} name={shortRun(n)} stroke={color(i)} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
         </LineChart>
       </Panel>
       <Panel title="Arrival time, seconds">
@@ -138,9 +166,8 @@ export function CompareCharts({ runs }: { runs: Record<string, RunData> }) {
           <CartesianGrid strokeOpacity={0.3} />
           <XAxis dataKey="dist_m" type="number" label={{ value: "metres down the valley", position: "insideBottom", offset: -2, fontSize: 11 }} tick={{ fontSize: 11 }} />
           <YAxis tick={{ fontSize: 11 }} width={55} />
-          <Tooltip formatter={fmt} labelFormatter={(l) => `${l} m`} />
-          <Legend wrapperStyle={{ fontSize: 10 }} />
-          {names.map((n, i) => <Line key={n} type="monotone" dataKey={`${n}__first`} name={describeRun(n)} stroke={PALETTE[i % PALETTE.length]} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
+          <Tooltip {...compactTip} labelFormatter={(l) => `${l} m down the valley`} />
+          {names.map((n, i) => <Line key={n} type="monotone" dataKey={`${n}__first`} name={shortRun(n)} stroke={color(i)} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
         </LineChart>
       </Panel>
     </>

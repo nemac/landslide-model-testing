@@ -85,7 +85,7 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
             paint: {
               "fill-color": ["match", ["get", "band_m"], ...DEPTH_BANDS.flatMap((b) => [b.band, b.color]), "#54278f"] as any,
               "fill-outline-color": ["match", ["get", "band_m"], ...DEPTH_BANDS.flatMap((b) => [b.band, b.color]), "#54278f"] as any,
-              "fill-opacity": 0.85,
+              "fill-opacity": ["match", ["get", "band_m"], ...DEPTH_BANDS.flatMap((b) => [b.band, b.opacity ?? 0.85]), 0.85] as any,
             },
           },
           {

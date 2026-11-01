@@ -19,10 +19,10 @@ For each slide (fid):
      inputs/LS-<fid>/hrelease.tif   release thickness over the source polygon:
                                     the table volume / polygon area (RELEASE_THICKNESS)
   2. a GRASS mapset LS-<fid> in grassdata/landslides, the two rasters imported
-  3. r.avaflow.40G -e -k, one-phase model, run in avaflow_runs/LS-<fid>/
+  3. r.avaflow.40G -e -k, one-phase model, run in RUNDIR/LS-<fid>/ on the external drive
      (r.avaflow writes LS<fid>_results/ there)
-  4. avaflow_runs/LS-<fid>/LS-<fid>_hflow_max.tif   deepest flow, metres
-     avaflow_runs/LS-<fid>/LS-<fid>_vflow_max.tif   fastest flow, m/s
+  4. RUNDIR/LS-<fid>/LS-<fid>_hflow_max.tif   deepest flow, metres
+     RUNDIR/LS-<fid>/LS-<fid>_vflow_max.tif   fastest flow, m/s
 
 Then every slide's deepest-flow raster goes into one geopackage per slide,
 outputs/landslide_<fid>_avaflow.gpkg (layer avaflow_<run name>, depth-band polygons
@@ -169,7 +169,11 @@ def run_settings(run, s):
 GRASSDATA = os.path.join(HERE, "grassdata")
 PROJECT = os.path.join(GRASSDATA, "landslides")
 INPUTS = os.path.join(HERE, "inputs")
-RUNDIR = os.path.join(HERE, "avaflow_runs")
+# run folders live on the external drive; each run keeps about 130 MB of grids, which filled the Mac
+RUNDIR = "/Volumes/exertnaldrive1/landslides/grassoutput"
+# each run is computed on the Mac's own disk (the external drive is too slow for six writers at
+# once) and moved to RUNDIR the moment it finishes, so only the runs in progress live here
+WORKDIR = os.path.join(HERE, "avaflow_work")
 
 
 def grass_exec(mapset, *cmd, cwd=None):
@@ -313,7 +317,8 @@ def run_slide(s, runs=RUNS, redo=False):
             print(f"   {run['name']}: already run, kept", flush=True)
             out.append((run, done_h, done_d))
             continue
-        shutil.rmtree(os.path.join(wd, f"{pf}_results"), ignore_errors=True)
+        work = os.path.join(WORKDIR, s["id"], run["name"])     # computed here, moved to wd when done
+        shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
         water = float(run.get("water_share", 0.0))
         if water > 0:
             # ground-and-water run: r.avaflow's three-material model with the middle
@@ -345,12 +350,12 @@ def run_slide(s, runs=RUNS, redo=False):
             cells = abs(float(grass_exec(s["id"], "r.what", "map=acc", f"coordinates={s['x']},{s['y']}").strip().split("|")[-1]))
             storm = storm_inflow(s, run["storm_in"], cells)
             end_s = int(run["time"].split(",")[1]); step_s = int(run["time"].split(",")[0])
-            hyd_p = os.path.join(wd, "storm_hydrograph.txt")
+            hyd_p = os.path.join(work, "storm_hydrograph.txt")
             with open(hyd_p, "w") as f:                      # header, then time, and per material: rate (m3/s), speed
                 f.write("T Q1 V1 Q2 V2 Q3 V3\n")             # water is material 3; materials 1 and 2 get nothing
                 for t in range(0, end_s + step_s, step_s):
                     f.write(f"{t} 0 0 0 0 {storm['inflow_m3s']:g} 0\n")
-            with open(os.path.join(wd, "storm.json"), "w") as f:
+            with open(os.path.join(work, "storm.json"), "w") as f:
                 json.dump(storm, f, indent=1)
             # hydrocoords: x, y, profile length, angle. Only the point matters in this mode.
             mix += [f"hydrograph={hyd_p}", f"hydrocoords={s['x']:.1f},{s['y']:.1f},{CELL_M:g},0"]
@@ -360,14 +365,14 @@ def run_slide(s, runs=RUNS, redo=False):
                    *mix, f"time={run['time']}", f"cellsize={CELL_M:g}",
                    f"thresholds={MIN_FLOW_M},10000,10000,{MIN_FLOW_M},0.000001",
                    # r.avaflow starts from the project's default region, so the box must be given
-                   f"aoicoords={top:.0f},{bottom:.0f},{left:.0f},{right:.0f}", cwd=wd)
+                   f"aoicoords={top:.0f},{bottom:.0f},{left:.0f},{right:.0f}", cwd=work)
         # r.avaflow resets the GRASS region to one cell when it finishes, so the
         # results are taken from the ascii grids it writes, not exported from GRASS
-        asc = os.path.join(wd, f"{pf}_results", f"{pf}_ascii")
-        htif = os.path.join(wd, f"{s['id']}_{run['name']}_hflow_max.tif")
-        vtif = os.path.join(wd, f"{s['id']}_{run['name']}_vflow_max.tif")
-        dtif = os.path.join(wd, f"{s['id']}_{run['name']}_deposit.tif")
-        btif = os.path.join(wd, f"{s['id']}_{run['name']}_basechange.tif")   # ground dug out (-) or laid down (+), m
+        asc = os.path.join(work, f"{pf}_results", f"{pf}_ascii")
+        htif = os.path.join(work, f"{s['id']}_{run['name']}_hflow_max.tif")
+        vtif = os.path.join(work, f"{s['id']}_{run['name']}_vflow_max.tif")
+        dtif = os.path.join(work, f"{s['id']}_{run['name']}_deposit.tif")
+        btif = os.path.join(work, f"{s['id']}_{run['name']}_basechange.tif")   # ground dug out (-) or laid down (+), m
         for src_name, dst in ((f"{pf}_hflow_max.asc", htif), (f"{pf}_vflow_max.asc", vtif), (f"{pf}_hflow_fin.asc", dtif),
                               (f"{pf}_basechange_fin.asc", btif)):
             p = os.path.join(asc, src_name)
@@ -378,14 +383,18 @@ def run_slide(s, runs=RUNS, redo=False):
             with rasterio.open(dst, "w", driver="GTiff", height=arr.shape[0], width=arr.shape[1], count=1,
                                dtype="float32", crs=CRS, transform=atr, nodata=-9999.0) as d:
                 d.write(arr, 1)
-        _trim_results(wd, pf)
+        _trim_results(work, pf)
+        # finished: move the whole run folder to the external drive, replacing any half-done copy
+        shutil.rmtree(wd, ignore_errors=True)
+        shutil.move(work, wd)
+        htif, dtif = (os.path.join(wd, os.path.basename(p)) for p in (htif, dtif))
         out.append((run, htif, dtif))
         print(f"   {run['name']}: stop slope {run['stop_slope']}°, pile angle {run['pile_angle']}°, water share {water:.0%} -> {os.path.basename(htif)}", flush=True)
     return out
 
 
 DEPOSIT_CUT = 0.01                  # ground counts as covered when the material got deeper than this
-DEPOSIT_BANDS = [(0.01, 0.05), (0.05, 0.2), (0.2, 0.5), (0.5, 1.0), (1.0, 1e9)]
+DEPOSIT_BANDS = [(0.0, 0.01), (0.01, 0.05), (0.05, 0.2), (0.2, 0.5), (0.5, 1.0), (1.0, 1e9)]   # first band: every cell the flow touched at all
 
 
 def _bands_to_layer(gp, layer, h, tr, crs, bands, props, thick_name):
@@ -563,8 +572,8 @@ def existing_results(s):
 
 # slides run in parallel, one slide per worker (every run of that slide, in order).
 # Each slide has its own GRASS mapset and run folders, so workers do not collide.
-# r.avaflow uses one core per run; this Mac has 10 cores, so 6 leaves room for the rest.
-WORKERS = 6
+# r.avaflow uses one core per run; this Mac has 8 fast cores and 2 slow ones, so 8.
+WORKERS = 8
 
 
 def _run_one(args):
@@ -591,6 +600,7 @@ if __name__ == "__main__":
         i = argv.index("--workers"); workers = max(1, int(argv[i + 1])); del argv[i:i + 2]
     want = [int(a) for a in argv if a.isdigit()] or None
     os.makedirs(GRASSDATA, exist_ok=True); os.makedirs(RUNDIR, exist_ok=True); os.makedirs(OUTPUTS, exist_ok=True)
+    os.makedirs(WORKDIR, exist_ok=True)
     if not os.path.isdir(PROJECT):
         subprocess.run([GRASS, "-c", CRS, "-e", PROJECT], check=True, capture_output=True)
     slides = load_slides()

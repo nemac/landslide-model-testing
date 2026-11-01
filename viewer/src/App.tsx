@@ -1,21 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Box, Checkbox, Divider, Drawer, FormControl, FormControlLabel, IconButton, InputLabel, Link, MenuItem,
-  Radio, RadioGroup, Select, Stack, Typography,
+  Box, Checkbox, Divider, Drawer, FormControl, FormControlLabel, IconButton, Link, MenuItem,
+  Radio, RadioGroup, Select, Slider, Stack, Tooltip, Typography,
 } from "@mui/material";
+import type { SliderValueLabelProps } from "@mui/material/Slider";
 import MapView from "./MapView";
 import { CompareCharts, ReviewCharts, SlideCharts } from "./Charts";
 import { Impacts, countImpacts, latestOvertureRelease } from "./overture";
-import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index, LAYERS, LayerId, ROAD_COLOR, describeRun } from "./config";
+import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index, LAYERS, LayerId, ROAD_COLOR, RUN_HELP, depthHelp, describeRun, rainHelp, slopeHelp } from "./config";
 
 const LEFT = 360;              // left panel default width; the user can drag it between the two below
 const MIN_LEFT = 280;
 const MAX_LEFT = 640;
 const RIGHT = 560;
+const UNCA_BLUE = "#003087";   // UNC Asheville blue, for the landslide dropdown
+const USE_SLIDERS = true;      // sliders for depth, stop slope and rainfall; false brings the radios back
 const ALL = "all";
 const DEFAULT_FID = 1;
 // blank charts for a run that has not been made yet
-const EMPTY = { volumes: [], profile: [], bands: ["1-5 cm", "5-20 cm", "20-50 cm", "50-100 cm", ">100 cm"].map((label) => ({ label, area_m2: 0 })), storm: null };
+const EMPTY = { volumes: [], profile: [], bands: ["0-1 cm", "1-5 cm", "5-20 cm", "20-50 cm", "50-100 cm", ">100 cm"].map((label) => ({ label, area_m2: 0 })), storm: null };
 
 // the left-panel settings live in the URL hash, so a link brings back the same view
 const DEFAULT_VISIBLE: Record<LayerId, boolean> = { deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true };
@@ -114,10 +117,9 @@ export default function App() {
           r.avaflow runs for the western NC source areas. Click a deposit, point or source for its graphs.
         </Typography>
 
-        <Card>
-          <FormControl fullWidth size="small">
-            <InputLabel>Landslide</InputLabel>
-            <Select label="Landslide" value={slideSel} onChange={(e) => { setSlideSel(e.target.value); if (e.target.value !== ALL) setPicked(Number(e.target.value)); }}>
+        <Card title="Landslide">
+          <FormControl fullWidth sx={{ "& .MuiSelect-select": { py: 1.5, px: 2 }, "& .MuiOutlinedInput-root": { bgcolor: UNCA_BLUE, color: "#fff", "& fieldset, &:hover fieldset, &.Mui-focused fieldset": { borderColor: UNCA_BLUE } }, "& .MuiSvgIcon-root": { color: "#fff" } }}>
+            <Select value={slideSel} onChange={(e) => { setSlideSel(e.target.value); if (e.target.value !== ALL) setPicked(Number(e.target.value)); }}>
               <MenuItem value={ALL}>All landslides</MenuItem>
               {index?.slides.map((s) => <MenuItem key={s.fid} value={String(s.fid)}>Landslide {s.fid} ({s.id})</MenuItem>)}
             </Select>
@@ -125,25 +127,19 @@ export default function App() {
         </Card>
 
         <Card title="Model run">
-        <Typography variant="caption" color="text.secondary">Release depth over the source area</Typography>
-        <RadioGroup row value={depth} onChange={(e) => setDepth(e.target.value)}>
-          {depths.map((d) => <FormControlLabel key={d} value={d} control={<Radio size="small" />} label={<Typography variant="body2">{depthLabel(d)}</Typography>} />)}
-        </RadioGroup>
-        <Typography variant="caption" color="text.secondary">Stop slope</Typography>
-        <RadioGroup row value={stopSlope} onChange={(e) => setStopSlope(e.target.value)}>
-          {stopSlopes.map((s) => <FormControlLabel key={s} value={s} control={<Radio size="small" />} label={<Typography variant="body2">{s}°</Typography>} />)}
-        </RadioGroup>
-        <Typography variant="caption" color="text.secondary">Soil</Typography>
+        <Help label="Release depth over the source area" help={RUN_HELP.depth} />
+        <Pick options={depths} value={depth} onChange={setDepth} label={depthLabel} help={(d) => depthHelp(d === "table" ? TABLE_M : Number(d))} />
+        <Help label="Stop slope" help={RUN_HELP.stopSlope} />
+        <Pick options={stopSlopes} value={stopSlope} onChange={setStopSlope} label={(s) => `${s}°`} help={(s) => slopeHelp(Number(s))} />
+        <Help label="Rainfall in 24 hours" help={RUN_HELP.rainfall} />
+        <Pick options={storms} value={storm} onChange={setStorm} label={(s) => (s === "none" ? "none" : `${s} in`)} help={(s) => rainHelp(s === "none" ? null : Number(s))} />
+        <Help label="Soil" help={RUN_HELP.soil} />
         <RadioGroup row value="sat">
           <FormControlLabel value="sat" control={<Radio size="small" />} label={<Typography variant="body2">saturated</Typography>} />
         </RadioGroup>
-        <Typography variant="caption" color="text.secondary">Entrainment</Typography>
+        <Help label="Entrainment" help={RUN_HELP.entrainment} />
         <RadioGroup row value="on">
           <FormControlLabel value="on" control={<Radio size="small" />} label={<Typography variant="body2">on</Typography>} />
-        </RadioGroup>
-        <Typography variant="caption" color="text.secondary">Rainfall in 24 hours</Typography>
-        <RadioGroup row value={storm} onChange={(e) => setStorm(e.target.value)}>
-          {storms.map((s) => <FormControlLabel key={s} value={s} control={<Radio size="small" />} label={<Typography variant="body2">{s === "none" ? "none" : `${s} in`}</Typography>} />)}
         </RadioGroup>
         <Typography variant="caption" color={runExists ? "text.secondary" : "error"}>{runExists ? run : `${run}: not run yet`}</Typography>
         <Typography variant="body2" sx={{ mt: 1 }}>
@@ -232,6 +228,66 @@ export default function App() {
         )}
       </Box>
     </Box>
+  );
+}
+
+// one setting's choices: a slider that snaps to the allowed values, or a row of radios.
+// Flip USE_SLIDERS to switch back to radios.
+function Pick({ options, value, onChange, label, help }: {
+  options: string[]; value: string; onChange: (v: string) => void; label: (o: string) => string; help: (o: string) => string;
+}) {
+  if (!USE_SLIDERS) {
+    return (
+      <RadioGroup row value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => <Tooltip key={o} title={help(o)} arrow><FormControlLabel value={o} control={<Radio size="small" />} label={<Typography variant="body2">{label(o)}</Typography>} /></Tooltip>)}
+      </RadioGroup>
+    );
+  }
+  const idx = Math.max(0, options.indexOf(value));
+  return (
+    <Box sx={{ px: 1.5, pt: 0.5, pb: 2.5 }}>
+      <Slider
+        size="small" min={0} max={Math.max(options.length - 1, 1)} step={null} value={idx}
+        marks={options.map((o, i) => ({ value: i, label: label(o) }))}
+        onChange={(_, v) => onChange(options[v as number])}
+        valueLabelDisplay="auto" valueLabelFormat={(i) => help(options[i as number])}
+        slots={{ valueLabel: SliderPopup }}
+        sx={{
+          "& .MuiSlider-markLabel": { fontSize: 12 },
+          "& .MuiSlider-track, & .MuiSlider-rail": { color: UNCA_BLUE, height: 6 },
+          "& .MuiSlider-mark": { width: 7, height: 7, borderRadius: "50%", bgcolor: "#fff", border: `2px solid ${UNCA_BLUE}`, transform: "translate(-50%, -50%)", opacity: 1 },
+          "& .MuiSlider-markActive": { bgcolor: UNCA_BLUE },
+          // the thumb: a solid down-pointing arrow in UNC Asheville blue, its tip on the track
+          "& .MuiSlider-thumb": {
+            width: 0, height: 0, bgcolor: "transparent", borderRadius: 0, boxShadow: "none",
+            borderLeft: "10px solid transparent", borderRight: "10px solid transparent", borderTop: `16px solid ${UNCA_BLUE}`,
+            transform: "translate(-50%, -5px)",   // flat top sits just above the 6 px line, tip points down through it
+            "&::before": { display: "none" },
+            "&:hover, &.Mui-focusVisible, &.Mui-active": { boxShadow: "none" },
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
+// the slider's hover popup as a tooltip, which shifts itself to stay inside the window
+function SliderPopup({ children, open, value }: SliderValueLabelProps) {
+  return (
+    <Tooltip open={open} title={value} placement="top" arrow enterTouchDelay={0} slotProps={{ tooltip: { sx: { fontSize: 11 } } }}>
+      {children}
+    </Tooltip>
+  );
+}
+
+// a setting's heading with a hover popup that says what it means in a few words
+function Help({ label, help }: { label: string; help: string }) {
+  return (
+    <Tooltip title={help} placement="right" arrow>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+        {label}<Box component="span" sx={{ fontSize: 11, border: "1px solid", borderRadius: "50%", width: 14, height: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>?</Box>
+      </Typography>
+    </Tooltip>
   );
 }
 

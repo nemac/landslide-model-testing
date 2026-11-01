@@ -1,6 +1,7 @@
 // Colours and labels shared by the map and the legend.
 // ColorBrewer Purples (5 classes) for peak depth, darker = deeper.
-export const DEPTH_BANDS: { band: string; label: string; color: string }[] = [
+export const DEPTH_BANDS: { band: string; label: string; color: string; opacity?: number }[] = [
+  { band: "0-0.01", label: "under 1 cm", color: "#fde0dd", opacity: 0.2 },   // everything the flow touched
   { band: "0.01-0.05", label: "1–5 cm", color: "#f2f0f7" },
   { band: "0.05-0.2", label: "5–20 cm", color: "#cbc9e2" },
   { band: "0.2-0.5", label: "20–50 cm", color: "#9e9ac8" },
@@ -73,6 +74,38 @@ export interface Index {
   storms_in?: number[];
   depths_m?: number[];            // release depths offered besides the table volume
   summary: Record<string, string>[];
+}
+
+// Short tag for a run, for chart hovers: "15°, 5 in, .07 m"
+export function shortRun(run: string): string {
+  const ss = run.match(/stopslope(\d+)/)?.[1] ?? "?";
+  const st = run.match(/storm(\d+)in/)?.[1];
+  const d = run.match(/depth(\d+)cm/)?.[1];
+  return `${ss}°, ${st ? `${st} in` : "no rain"}, ${d ? `.${d.padStart(2, "0")}` : ".07"} m`;
+}
+
+// Three to seven plain words for each model run setting, for the hover popups
+export const RUN_HELP: Record<string, string> = {
+  depth: "How thick the soil layer that slides is",
+  stopSlope: "Slope where the moving material stops",
+  soil: "Soil holding all the water it can",
+  entrainment: "Flow picks up ground as it goes",
+  rainfall: "Storm runoff fed in at the release point",
+};
+
+// A few plain words for each setting's value, with feet and inches for metric numbers
+const SLOPE_WORDS: Record<number, string> = { 5: "nearly flat", 10: "gentle", 15: "moderate", 20: "steep driveway", 25: "steep hillside", 30: "very steep hillside" };
+export function depthHelp(m: number): string {
+  return `${(m * 39.37).toFixed(1)} inches of soil slides`;
+}
+export function slopeHelp(deg: number): string {
+  const run = 1 / Math.tan((deg * Math.PI) / 180);
+  return `drops 1 ft every ${run.toFixed(run < 3 ? 1 : 0)} ft, ${SLOPE_WORDS[deg] ?? ""}`.replace(/, $/, "");
+}
+export function rainHelp(inches: number | null): string {
+  if (!inches) return "no storm, wet soil only";
+  if (inches >= 10) return `${inches} inches in a day, extreme storm`;
+  return `${inches} inches in a day, big storm`;
 }
 
 // Plain-words description of a run name, e.g. stopslope15_soilsat_entrain_storm5in

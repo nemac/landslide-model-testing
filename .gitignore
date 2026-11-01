@@ -140,6 +140,7 @@ outputs/
 # ---------- r.avaflow work ----------
 # results and run folders (large; remade by avaflow_run.py)
 avaflow_runs/
+avaflow_work/
 grassdata/
 inputs/
 logs/
