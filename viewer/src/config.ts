@@ -1,7 +1,7 @@
 // Colours and labels shared by the map and the legend.
 // ColorBrewer Purples (5 classes) for peak depth, darker = deeper.
 export const DEPTH_BANDS: { band: string; label: string; color: string; opacity?: number }[] = [
-  { band: "0-0.01", label: "under 1 cm", color: "#fde0dd", opacity: 0.2 },   // everything the flow touched
+  { band: "0-0.01", label: "under 1 cm", color: "#fde0dd", opacity: 0.35 },   // everything the flow touched
   { band: "0.01-0.05", label: "1–5 cm", color: "#f2f0f7" },
   { band: "0.05-0.2", label: "5–20 cm", color: "#cbc9e2" },
   { band: "0.2-0.5", label: "20–50 cm", color: "#9e9ac8" },

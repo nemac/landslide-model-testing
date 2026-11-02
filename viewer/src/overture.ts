@@ -92,28 +92,36 @@ export async function countImpacts(slidesUrl: string, release: string, lon: numb
     if (seenB.has(id)) continue;
     if (touches(f)) { seenB.add(id); buildings++; buildingFeatures.push(f); }
   }
-  // road segments, once each, with the length of the part inside the footprint
-  const seenR = new Set<string>();
-  let roads = 0, roadLengthM = 0;
-  const roadsByClass: Record<string, number> = {};
-  const roadFeatures: GeoJSON.Feature[] = [];
+  // road segments, once each, with the length of the part inside the footprint.
+  // A segment that crosses a tile edge arrives as two pieces; gather the pieces by id first
+  // so a road that touches is counted once and drawn whole, not cut off at the tile edge.
+  const byId = new Map<string, GeoJSON.Feature[]>();
   for (const f of (await Promise.all(tiles.map(([tx, ty]) => tileFeatures(trn, "segment", Z, tx, ty)))).flat()) {
     if (f.properties?.subtype && f.properties.subtype !== "road") continue;   // rail, water and such are not roads
     const id = String(f.properties?.id ?? JSON.stringify(f.geometry));
-    if (seenR.has(id) || !touches(f)) continue;
-    seenR.add(id); roads++; roadFeatures.push(f);
-    const cls = String(f.properties?.class ?? "unknown");
+    const list = byId.get(id);
+    if (list) list.push(f); else byId.set(id, [f]);
+  }
+  let roads = 0, roadLengthM = 0;
+  const roadsByClass: Record<string, number> = {};
+  const roadFeatures: GeoJSON.Feature[] = [];
+  for (const pieces of byId.values()) {
+    if (!pieces.some(touches)) continue;
+    roads++; roadFeatures.push(...pieces);
+    const cls = String(pieces[0].properties?.class ?? "unknown");
     roadsByClass[cls] = (roadsByClass[cls] ?? 0) + 1;
-    try {
-      for (const d of dep) {
-        const inside = turf.lineSplit(f as any, d as any);
-        const pieces = inside.features.length ? inside.features : [f];
-        for (const p of pieces) {
-          const mid = turf.along(p as any, turf.length(p as any) / 2);
-          if (turf.booleanPointInPolygon(mid, d as any)) roadLengthM += turf.length(p as any, { units: "meters" });
+    for (const f of pieces) {
+      try {
+        for (const d of dep) {
+          const inside = turf.lineSplit(f as any, d as any);
+          const parts = inside.features.length ? inside.features : [f];
+          for (const p of parts) {
+            const mid = turf.along(p as any, turf.length(p as any) / 2);
+            if (turf.booleanPointInPolygon(mid, d as any)) roadLengthM += turf.length(p as any, { units: "meters" });
+          }
         }
-      }
-    } catch { /* odd geometry: count it, skip the length */ }
+      } catch { /* odd geometry: count it, skip the length */ }
+    }
   }
   return { buildings, roads, roadsByClass, roadLengthM: Math.round(roadLengthM), footprintM2: Math.round(footprintM2), tiles: tiles.length, buildingFeatures, roadFeatures };
 }
