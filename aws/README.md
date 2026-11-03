@@ -65,8 +65,8 @@ written to `avaflow_runs/` inside the repo folder (not in git) with only the fil
 scripts read back: the peak depth, deposit and ground change grids, the arrival time grid,
 the storm inflow file and the volume table.
 
-`remote_watch.sh` watches the run log. Each time a slide finishes it rebuilds that slide's
-geopackage and figures, remakes the tiles and index with `make_viewer_data.py`, commits
+`remote_watch.sh` pushes every two hours (PUSH_EVERY seconds). Each push rebuilds the
+geopackages and figures of the slides with new runs, remakes the tiles and index with `make_viewer_data.py`, commits
 `viewer/public/data` and pushes to master. GitHub Pages then rebuilds the site. When the
 last slide is done the run makes its own final collect, the watcher pushes once more, and
 the machine shuts down. Logs on the machine, in the repo folder:
