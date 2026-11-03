@@ -9,7 +9,7 @@ LAUNCHED=$(aws ec2 describe-instances --region "$REGION" --filters "Name=tag:Nam
 HOURS=$(python3 -c "from datetime import datetime,timezone; print(round((datetime.now(timezone.utc)-datetime.fromisoformat('$LAUNCHED'.replace('Z','+00:00'))).total_seconds()/3600,1))")
 echo "machine: $INSTANCE_TYPE at $IP, up $HOURS h (about \$$(python3 -c "print(round($HOURS*0.714,2))") so far)"
 ssh $SSH_OPTS ubuntu@$IP "cd $REMOTE_DIR 2>/dev/null || exit 0
-echo \"run job: \$(pgrep -f 'avaflow_run.py' >/dev/null && echo going || echo not running)   r.avaflow now: \$(pgrep -f r.avaflow.main | wc -l)\"
+echo \"run job: \$(pgrep -f 'python3 avaflow_run[.]py' >/dev/null && echo going || echo not running)   r.avaflow now: \$(pgrep -f r.avaflow.main | wc -l)\"
 [ -f logs/avaflow_cloud.log ] || { echo 'no run started yet'; exit 0; }
 echo \"finished runs on the machine: \$(ls -d avaflow_runs/*/stopslope* 2>/dev/null | wc -l)\"
 echo \"slides done this run: \$(grep -c ' done' logs/avaflow_cloud.log) of \$(head -1 logs/avaflow_cloud.log | cut -d' ' -f1)\"

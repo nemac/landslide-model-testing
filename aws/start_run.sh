@@ -8,7 +8,7 @@
 set -e
 source "$(dirname "$0")/common.sh"
 need_ip
-if ssh $SSH_OPTS ubuntu@$IP "pgrep -f avaflow_run.py >/dev/null"; then
+if ssh $SSH_OPTS ubuntu@$IP "pgrep -f 'python3 avaflow_run[.]py' >/dev/null"; then
   echo "a run is already going on the machine; see bash aws/status.sh"; exit 1
 fi
 ssh $SSH_OPTS ubuntu@$IP "cd $REMOTE_DIR && mkdir -p logs && nohup bash aws/remote_run.sh $* > logs/remote_run.log 2>&1 &"

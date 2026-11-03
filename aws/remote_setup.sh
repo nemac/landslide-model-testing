@@ -47,7 +47,7 @@ done
 grass --tmp-project EPSG:6542 --exec r.avaflow.40G --help 2>&1 | head -2
 
 echo "== python packages"
-pip3 install -q --user numpy rasterio fiona shapely pyproj matplotlib
+pip3 install -q --user --ignore-installed numpy rasterio fiona shapely pyproj matplotlib   # fresh copies, not the apt ones
 
 echo "== tippecanoe"
 if ! command -v tippecanoe >/dev/null; then
