@@ -4,13 +4,16 @@ Run r.avaflow (4.0G, in GRASS GIS 8.4) on the landslide sources.
     python3 avaflow_run.py                 all 20 slides
     python3 avaflow_run.py 8 13            slides with these fids only
     python3 avaflow_run.py --collect       rebuild the geopackages from runs already on disk
+    python3 avaflow_run.py --collect 21 22 only these slides' geopackages
     python3 avaflow_run.py 8 --runs stopslope15_soilsat_entrain
                                            only these runs (names from RUNS) for slide 8
     python3 avaflow_run.py --workers 4     slides in parallel, 4 at a time (default WORKERS)
     python3 avaflow_run.py --redo          rerun runs that are already on disk (otherwise kept)
 
 Reads the source areas from inputs/sourceareas_dambreach.gpkg and the release
-points from inputs/sourceareas_min_elev.gpkg (neither is kept in git).
+points from inputs/sourceareas_min_elev.gpkg (slides LS-01 to LS-20), then the
+second set, inputs/source_areas_testArea2.gpkg and inputs/lowest_points_testArea2.gpkg
+(matched by their uid field, which is the slide id; fids 21 up). None are kept in git.
 
 For each slide (fid):
   1. inputs/LS-<fid>/dem.tif        10 m terrain from the USGS 3DEP 1/3 arc-second
@@ -46,7 +49,7 @@ from pyproj import Transformer
 # ---- settings ---------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUTS = os.path.join(HERE, "outputs")   # every geopackage and CSV the scripts write
-GRASS = "/usr/local/bin/grass"
+GRASS = shutil.which("grass") or "/usr/local/bin/grass"   # the grass command on this machine (Mac or Linux)
 CRS = "EPSG:6542"                   # NAD83(2011) / North Carolina, metres
 CELL_M = 10.0
 HALF_BOX_M = 2500.0                 # terrain 2.5 km each side of the point (was 1.5 km; low stop slopes clipped)
@@ -169,8 +172,11 @@ def run_settings(run, s):
 GRASSDATA = os.path.join(HERE, "grassdata")
 PROJECT = os.path.join(GRASSDATA, "landslides")
 INPUTS = os.path.join(HERE, "inputs")
-# run folders live on the external drive; each run keeps about 130 MB of grids, which filled the Mac
-RUNDIR = "/Volumes/exertnaldrive1/landslides/grassoutput"
+# run folders live on the external drive; each run keeps about 130 MB of grids, which filled the Mac.
+# AVAFLOW_RUNDIR in the environment points somewhere else (the cloud runner uses a folder in the repo).
+RUNDIR = os.environ.get("AVAFLOW_RUNDIR") or "/Volumes/exertnaldrive1/landslides/grassoutput"
+# AVAFLOW_LEAN=1 keeps only the files the scripts read back (about 7 MB a run instead of 130)
+LEAN = os.environ.get("AVAFLOW_LEAN") == "1"
 # each run is computed on the Mac's own disk (the external drive is too slow for six writers at
 # once) and moved to RUNDIR the moment it finishes, so only the runs in progress live here
 WORKDIR = os.path.join(HERE, "avaflow_work")
@@ -183,6 +189,14 @@ def grass_exec(mapset, *cmd, cwd=None):
     if r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd[:1])} failed:\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
     return r.stdout
+
+
+# the second set of sources (test area 2): no volume table, so the default release is
+# TABLE_DEPTH_M over the polygon, the same 0.071 m the first set's table works out to.
+# Its slides are numbered on from the first set (fid 21 up, in uid order) and named by uid.
+SET2_POINTS = os.path.join(INPUTS, "lowest_points_testArea2.gpkg")
+SET2_AREAS = os.path.join(INPUTS, "source_areas_testArea2.gpkg")
+TABLE_DEPTH_M = 0.071
 
 
 def load_slides():
@@ -205,6 +219,25 @@ def load_slides():
             out[fid] = {"fid": fid, "id": f"LS-{fid:02d}", "x": pts[fid][0], "y": pts[fid][1],
                         "poly": poly, "area_m2": poly.area, "volume_m3": vol,
                         "height_m": float(p["height"]) * FT}
+    if os.path.exists(SET2_POINTS) and os.path.exists(SET2_AREAS):
+        pts2 = {}
+        with fiona.open(SET2_POINTS) as l:
+            to = Transformer.from_crs(l.crs, CRS, always_xy=True)
+            for ft in l:
+                x, y = ft["geometry"]["coordinates"][:2]
+                pts2[ft["properties"]["uid"]] = to.transform(x, y)
+        polys2 = {}
+        with fiona.open(SET2_AREAS) as l:
+            to = Transformer.from_crs(l.crs, CRS, always_xy=True)
+            for ft in l:
+                polys2[ft["properties"]["uid"]] = stransform(to.transform, shape(ft["geometry"]))
+        fid = max(out) if out else 0
+        for uid in sorted(set(pts2) & set(polys2)):
+            fid += 1
+            poly = polys2[uid]
+            out[fid] = {"fid": fid, "id": uid, "x": pts2[uid][0], "y": pts2[uid][1],
+                        "poly": poly, "area_m2": poly.area, "volume_m3": poly.area * TABLE_DEPTH_M,
+                        "height_m": TABLE_DEPTH_M}
     return out
 
 
@@ -228,6 +261,19 @@ def _trim_results(wd, pf):
                     pass
     for sub in (f"{pf}_plots", f"{pf}_vr", f"{pf}_aimec"):
         shutil.rmtree(os.path.join(res, sub), ignore_errors=True)
+    if LEAN and os.path.isdir(res):
+        # keep only what collect and the plots read back: treach and the _files tables
+        # (the depth grids were already exported as tifs next to the results folder)
+        for fn in os.listdir(asc) if os.path.isdir(asc) else []:
+            if fn != f"{pf}_treach.asc":
+                try:
+                    os.remove(os.path.join(asc, fn))
+                except OSError:
+                    pass
+        for sub in os.listdir(res):
+            if sub not in (f"{pf}_ascii", f"{pf}_files"):
+                p = os.path.join(res, sub)
+                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
 
 
 def _grid_ok(tif, nx):
@@ -579,11 +625,12 @@ WORKERS = 8
 def _run_one(args):
     """One slide, all its runs; for the worker pool. Returns (slide id, error or None)."""
     s, runs, redo = args
+    tag = f"{s['id']} (fid {s['fid']})"
     try:
         run_slide(s, runs, redo)
-        return s["id"], None
+        return tag, None
     except Exception as e:
-        return s["id"], str(e)
+        return tag, str(e)
 
 
 if __name__ == "__main__":
@@ -618,8 +665,11 @@ if __name__ == "__main__":
                 sid, err = _run_one((s, runs, redo))
                 if err:
                     print(f"   {sid} failed: {err}", flush=True)
-    # the geopackages and the summary always cover every run on disk, for every slide
+    # the geopackages and the summary cover every run on disk for the slides asked for
+    # (all of them when no fids are given)
     for fid in sorted(slides):
+        if want and fid not in want:
+            continue
         results = existing_results(slides[fid])
         if results:
             collect(slides[fid], results, summary)

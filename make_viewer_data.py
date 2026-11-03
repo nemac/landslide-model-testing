@@ -25,7 +25,7 @@ from pyproj import Transformer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from avaflow_run import RUNS, STOP_SLOPES, STORMS_IN, RELEASE_DEPTHS_M   # only the runs the project currently makes
+from avaflow_run import RUNS, STOP_SLOPES, STORMS_IN, RELEASE_DEPTHS_M, CRS, load_slides   # only the runs the project currently makes
 ACTIVE_RUNS = {r["name"] for r in RUNS}
 OUTPUTS = os.path.join(HERE, "outputs")
 INPUTS = os.path.join(HERE, "inputs")
@@ -107,21 +107,17 @@ def main():
         write_geojson(os.path.join(tmp, f"{kind}.geojson"), feats)
         print(f"{kind}: {len(feats)} features")
 
-    # the sources and release points
-    slides = []
-    with fiona.open(os.path.join(INPUTS, "sourceareas_min_elev.gpkg")) as src:
-        tf = to_wgs84(src.crs); pts = []
-        for ft in src:
-            fid = int(ft["id"]); g = stransform(tf, shape(ft["geometry"]))
-            pts.append({"type": "Feature", "geometry": mapping(g), "properties": {"source_fid": fid, "slide_id": f"LS-{fid:02d}"}})
-            slides.append({"fid": fid, "id": f"LS-{fid:02d}", "lon": round(g.x, 6), "lat": round(g.y, 6)})
+    # the sources and release points, both source sets, as avaflow_run.py sees them
+    slides, pts, polys = [], [], []
+    tf = to_wgs84(CRS)
+    for fid, s in sorted(load_slides().items()):
+        lon, lat = tf(s["x"], s["y"])
+        pts.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": {"source_fid": fid, "slide_id": s["id"]}})
+        polys.append({"type": "Feature", "geometry": mapping(stransform(tf, s["poly"])),
+                      "properties": {"source_fid": fid, "slide_id": s["id"], "area_m2": round(s["area_m2"]), "table_m3": round(s["volume_m3"], 1)}})
+        slides.append({"fid": fid, "id": s["id"], "lon": round(lon, 6), "lat": round(lat, 6)})
     write_geojson(os.path.join(tmp, "points.geojson"), pts)
-    with fiona.open(os.path.join(INPUTS, "sourceareas_dambreach.gpkg")) as src:
-        tf = to_wgs84(src.crs); polys = []
-        for ft in src:
-            fid = int(ft["id"]); p = ft["properties"]
-            polys.append({"type": "Feature", "geometry": mapping(stransform(tf, shape(ft["geometry"]))),
-                          "properties": {"source_fid": fid, "slide_id": f"LS-{fid:02d}", "acrefeet": p.get("acrefeet"), "height_ft": p.get("height")}})
     write_geojson(os.path.join(tmp, "sources.geojson"), polys)
 
     # one pmtiles, five layers

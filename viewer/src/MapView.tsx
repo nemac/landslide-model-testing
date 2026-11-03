@@ -29,6 +29,16 @@ class TiltSpinControl {
 }
 const SOURCE_LAYERS = ["sources-fill", "sources-line", "points-pt"];
 
+// the map view the page opened with, from the URL hash (lon, lat, zoom), or null
+function viewFromUrl(): { lon: number; lat: number; zoom: number } | null {
+  const p = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const lon = Number(p.get("lon")), lat = Number(p.get("lat")), zoom = Number(p.get("zoom"));
+  const ok = p.get("lon") != null && p.get("lat") != null && p.get("zoom") != null && isFinite(lon) && isFinite(lat) && isFinite(zoom)
+    && Math.abs(lon) <= 180 && Math.abs(lat) <= 90 && zoom >= 0 && zoom <= 24;
+  return ok ? { lon, lat, zoom } : null;
+}
+const urlView = viewFromUrl();
+
 interface Props {
   run: string;
   fid: number | null;            // one slide, or null for all
@@ -46,6 +56,7 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
   const div = useRef<HTMLDivElement>(null);
   const map = useRef<Map | null>(null);
   const ready = useRef(false);
+  const restored = useRef(urlView != null);   // the first automatic zoom is skipped when the URL holds a view
   const pick = useRef(onPick);
   pick.current = onPick;
   const latest = useRef({ run, fid, basemap, visible });
@@ -123,8 +134,15 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
           { id: "hydrograph-pt", type: "circle", source: "slides", "source-layer": "hydrograph", paint: { "circle-radius": 7, "circle-color": "#2b6f8b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 } },
         ],
       },
-      center: [-82.5, 35.6],
-      zoom: 9,
+      center: urlView ? [urlView.lon, urlView.lat] : [-82.5, 35.6],
+      zoom: urlView ? urlView.zoom : 9,
+    });
+    // keep the centre and zoom in the URL, so a refresh or a shared link comes back to the same view
+    m.on("moveend", () => {
+      const c = m.getCenter();
+      const p = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      p.set("lon", c.lng.toFixed(5)); p.set("lat", c.lat.toFixed(5)); p.set("zoom", m.getZoom().toFixed(2));
+      window.history.replaceState(null, "", `#${p.toString()}`);
     });
     m.addControl(new maplibregl.NavigationControl({ visualizePitch: true, showCompass: true, showZoom: true }), "top-right");
     m.addControl(new TiltSpinControl() as any, "top-right");
@@ -167,6 +185,7 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
   // zoom to the chosen slide, or to all of them
   const zoom = (m: Map) => {
     if (!slides.length) return;
+    if (restored.current) { restored.current = false; return; }   // the URL set the view; keep it the first time
     const s = fid != null ? slides.find((x) => x.fid === fid) : null;
     if (s) {
       m.flyTo({ center: [s.lon, s.lat], zoom: 14.5, duration: 600 });

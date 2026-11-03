@@ -12,7 +12,9 @@ import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index,
 const LEFT = 360;              // left panel default width; the user can drag it between the two below
 const MIN_LEFT = 280;
 const MAX_LEFT = 640;
-const RIGHT = 560;
+const RIGHT = 560;             // right (charts) panel default width; draggable between the two below
+const MIN_RIGHT = 360;
+const MAX_RIGHT = 1100;
 const UNCA_BLUE = "#003087";   // UNC Asheville blue, for the landslide dropdown
 const USE_SLIDERS = true;      // sliders for depth, stop slope and rainfall; false brings the radios back
 const ALL = "all";
@@ -41,21 +43,27 @@ export default function App() {
   const [visible, setVisible] = useState<Record<LayerId, boolean>>(visibleFromUrl);
   const [picked, setPicked] = useState<number | null>(slideSel === ALL ? null : Number(slideSel));   // charts open from the start
   const [left, setLeft] = useState(() => Math.min(MAX_LEFT, Math.max(MIN_LEFT, Number(fromUrl("left", String(LEFT))) || LEFT)));   // left panel width, draggable
+  const [right, setRight] = useState(() => Math.min(MAX_RIGHT, Math.max(MIN_RIGHT, Number(fromUrl("right", String(RIGHT))) || RIGHT)));   // charts panel width, draggable
 
   useEffect(() => {
-    const p = new URLSearchParams({ slide: slideSel, depth, slope: stopSlope, storm, basemap,
-      layers: LAYERS.filter((l) => visible[l.id]).map((l) => l.id).join(","), left: String(left) });
+    // keep what is already there (the map's centre and zoom, written by MapView) and set the rest
+    const p = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    Object.entries({ slide: slideSel, depth, slope: stopSlope, storm, basemap,
+      layers: LAYERS.filter((l) => visible[l.id]).map((l) => l.id).join(","), left: String(left), right: String(right) })
+      .forEach(([k, v]) => p.set(k, v));
     window.history.replaceState(null, "", `#${p.toString()}`);
-  }, [slideSel, depth, stopSlope, storm, basemap, visible, left]);
+  }, [slideSel, depth, stopSlope, storm, basemap, visible, left, right]);
 
-  // drag the left panel's right edge to resize it
-  const startDrag = (e: React.MouseEvent) => {
+  // drag a panel's edge to resize it: the left panel by its right edge, the charts panel by its left edge
+  const drag = (set: (w: number) => void, fromRight: boolean, min: number, max: number) => (e: React.MouseEvent) => {
     e.preventDefault();
-    const move = (ev: MouseEvent) => setLeft(Math.min(MAX_LEFT, Math.max(MIN_LEFT, ev.clientX)));
+    const move = (ev: MouseEvent) => set(Math.min(max, Math.max(min, fromRight ? window.innerWidth - ev.clientX : ev.clientX)));
     const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   };
+  const startDrag = drag(setLeft, false, MIN_LEFT, MAX_LEFT);
+  const startDragRight = drag(setRight, true, MIN_RIGHT, MAX_RIGHT);
   const [chartData, setChartData] = useState<Record<string, SlideCharts>>({});
   const [release, setRelease] = useState<string | null>(null);
   const [impacts, setImpacts] = useState<Impacts | "counting" | null>(null);
@@ -200,9 +208,10 @@ export default function App() {
         </Box>
       </Box>
 
-      <Box sx={{ width: slide ? RIGHT : 0, flexShrink: 0, p: slide ? 2 : 0, boxSizing: "border-box", overflowY: "auto", borderLeft: slide ? "1px solid #ddd" : "none", bgcolor: "background.paper" }}>
+      <Box sx={{ position: "relative", width: slide ? right : 0, flexShrink: 0, p: slide ? 2 : 0, boxSizing: "border-box", overflowY: "auto", borderLeft: slide ? "1px solid #ddd" : "none", bgcolor: "background.paper" }}>
         {slide && (
           <>
+            <Box onMouseDown={startDragRight} sx={{ position: "fixed", top: 0, bottom: 0, right: right - 3, width: 6, cursor: "col-resize", zIndex: 2, "&:hover": { bgcolor: "rgba(0,0,0,0.08)" } }} />
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Typography variant="h6">Landslide {slide.fid} ({slide.id})</Typography>
               <IconButton size="small" onClick={() => setPicked(null)} aria-label="close">✕</IconButton>

@@ -13,10 +13,11 @@ Soil data come from the USDA Soil Data Access web service (SSURGO). For each
 point: the map unit under it, its main soil component, and that soil's layers
 down to PROFILE_CM, averaged by layer thickness.
 
-Reads the points from inputs/sourceareas_min_elev.gpkg (not kept in git).
-Writes outputs/landslide_soils.csv (one row per slide, fid kept).
+Reads the slides from avaflow_run.load_slides (both source sets in inputs/, not kept in git).
+Writes outputs/landslide_soils.csv (one row per slide, fid kept). Slides already in the
+CSV keep their row; --redo looks every slide up again.
 """
-import os, csv, json, urllib.request, fiona
+import os, csv, json, time, urllib.request, urllib.error, fiona
 from pyproj import Transformer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,8 +39,15 @@ PILE_ANGLE = {
 def sda(query):
     body = json.dumps({"query": query, "format": "JSON+COLUMNNAME"}).encode()
     req = urllib.request.Request(SDA, body, {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        data = json.loads(r.read().decode())
+    for attempt in range(6):                  # the service often answers 503 for a moment; wait and try again
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = json.loads(r.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 5:
+                raise
+            time.sleep(3 * 2 ** attempt)
     rows = data.get("Table", [])
     if not rows:
         return []
@@ -93,7 +101,12 @@ def lookup(lon, lat):
         ORDER BY c.comppct_r DESC, ch.hzdept_r""")
     if not rows:
         return {"mukey": mukey, "muname": sda(f"SELECT muname FROM mapunit WHERE mukey='{mukey}'")[0]["muname"]}
-    cokey = rows[0]["cokey"]                          # the main soil in this map unit
+    # the main soil in this map unit; when that is bare rock (no texture, e.g. "Rock outcrop"),
+    # the biggest component that does have a soil described
+    cokey = rows[0]["cokey"]
+    for r in rows:
+        if f(r["sandtotal_r"]) is not None:
+            cokey = r["cokey"]; break
     hz = [r for r in rows if r["cokey"] == cokey]
     # thickness-weighted averages over the layers down to PROFILE_CM
     acc = {"sand": [0, 0], "silt": [0, 0], "clay": [0, 0], "wsat": [0, 0], "wfc": [0, 0], "wwp": [0, 0], "bd": [0, 0]}
@@ -115,8 +128,8 @@ def lookup(lon, lat):
     # how deep the soil goes before rock: the bottom of the deepest layer the survey
     # describes, cm. Used as how deep a flow can dig (entrainment).
     depths = [f(r["hzdepb_r"]) for r in hz if f(r["hzdepb_r"]) is not None]
-    out = {"mukey": mukey, "muname": rows[0]["muname"], "soil": rows[0]["compname"],
-           "soil_share_pct": rows[0]["comppct_r"], "surface_texture": hz[0]["texture"],
+    out = {"mukey": mukey, "muname": rows[0]["muname"], "soil": hz[0]["compname"],
+           "soil_share_pct": hz[0]["comppct_r"], "surface_texture": hz[0]["texture"],
            "sand_pct": mean["sand"], "silt_pct": mean["silt"], "clay_pct": mean["clay"],
            "soil_depth_cm": max(depths) if depths else None}
     if None not in (mean["sand"], mean["silt"], mean["clay"]):
@@ -143,22 +156,31 @@ def lookup(lon, lat):
 
 
 if __name__ == "__main__":
+    # every slide avaflow_run.py knows (both source sets). Rows already in the CSV are
+    # kept as they are; only slides without a row are looked up. --redo looks up all.
+    import sys
+    sys.path.insert(0, HERE)
+    from avaflow_run import load_slides, CRS
+    redo = "--redo" in sys.argv
+    have = {}
+    if os.path.exists(OUT) and not redo:
+        have = {int(r["source_fid"]): r for r in csv.DictReader(open(OUT))}
+    to_ll = Transformer.from_crs(CRS, "EPSG:4326", always_xy=True)
     rows = []
-    with fiona.open(os.path.join(HERE, "inputs", "sourceareas_min_elev.gpkg")) as l:
-        to_ll = Transformer.from_crs(l.crs, "EPSG:4326", always_xy=True)
-        for ft in sorted(l, key=lambda ft: int(ft["id"])):
-            fid = int(ft["id"])
-            lon, lat = to_ll.transform(*ft["geometry"]["coordinates"][:2])
-            r = {"source_fid": fid, "slide_id": f"LS-{fid:02d}", "lat": round(lat, 6), "lon": round(lon, 6)}
-            try:
-                s = lookup(lon, lat) or {}
-            except Exception as e:
-                s = {"note": f"lookup failed: {e}"}
-            r.update(s)
-            rows.append(r)
-            print(f"{r['slide_id']}  {s.get('soil', '-'):12s} {s.get('texture_class', '-'):16s} "
-                  f"pile angle {s.get('pile_angle_deg', '-')}  water share {s.get('water_share', '-')}  "
-                  f"({s.get('muname', s.get('note', '-'))})")
+    for fid, sl in sorted(load_slides().items()):
+        if fid in have and have[fid].get("pile_angle_deg"):      # a usable row; failed lookups are tried again
+            rows.append(have[fid]); continue
+        lon, lat = to_ll.transform(sl["x"], sl["y"])
+        r = {"source_fid": fid, "slide_id": sl["id"], "lat": round(lat, 6), "lon": round(lon, 6)}
+        try:
+            s = lookup(lon, lat) or {}
+        except Exception as e:
+            s = {"note": f"lookup failed: {e}"}
+        r.update(s)
+        rows.append(r)
+        print(f"{r['slide_id']}  {s.get('soil', '-'):12s} {s.get('texture_class', '-'):16s} "
+              f"pile angle {s.get('pile_angle_deg', '-')}  water share {s.get('water_share', '-')}  "
+              f"({s.get('muname', s.get('note', '-'))})")
     cols = ["source_fid", "slide_id", "lat", "lon", "mukey", "muname", "soil", "soil_share_pct", "surface_texture",
             "sand_pct", "silt_pct", "clay_pct", "texture_class", "pile_angle_deg",
             "water_saturated", "water_field_capacity", "water_wilting", "rain_to_saturate_in",
