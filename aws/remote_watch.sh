@@ -36,7 +36,12 @@ push() {   # $1 = fids to collect and plot (empty: nothing new), $2 = label, $3 
   git commit -q -m "viewer data: $2
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" >> logs/push_last.log 2>&1
-  git pull -q --rebase --autostash >> logs/push_last.log 2>&1 && git push -q >> logs/push_last.log 2>&1 \
+  # bring master in first. Copies sent up by copy_up.sh that have since been committed on
+  # master would block the pull, so drop them (master's version replaces them); where master
+  # and this machine both changed a data file, this machine's version wins.
+  git fetch -q >> logs/push_last.log 2>&1
+  for f in $(git ls-files --others --exclude-standard); do git cat-file -e "origin/master:$f" 2>/dev/null && rm -f "$f"; done
+  git pull -q --rebase --autostash -X theirs >> logs/push_last.log 2>&1 && git push -q >> logs/push_last.log 2>&1 \
     && echo "pushed $(git log --oneline -1)" || echo "PUSH FAILED (git), see logs/push_last.log"
 }
 while true; do
