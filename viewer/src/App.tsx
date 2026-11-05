@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Box, Checkbox, Divider, Drawer, FormControl, FormControlLabel, IconButton, Link, MenuItem,
-  Radio, RadioGroup, Select, Slider, Stack, Tooltip, Typography,
+  Autocomplete, Box, Checkbox, Divider, Drawer, FormControlLabel, IconButton, Link,
+  Radio, RadioGroup, Slider, Stack, TextField, Tooltip, Typography,
 } from "@mui/material";
 import type { SliderValueLabelProps } from "@mui/material/Slider";
 import MapView from "./MapView";
@@ -126,12 +126,17 @@ export default function App() {
         </Typography>
 
         <Card title="Landslide">
-          <FormControl fullWidth sx={{ "& .MuiSelect-select": { py: 1.5, px: 2 }, "& .MuiOutlinedInput-root": { bgcolor: UNCA_BLUE, color: "#fff", "& fieldset, &:hover fieldset, &.Mui-focused fieldset": { borderColor: UNCA_BLUE } }, "& .MuiSvgIcon-root": { color: "#fff" } }}>
-            <Select value={slideSel} onChange={(e) => { setSlideSel(e.target.value); if (e.target.value !== ALL) setPicked(Number(e.target.value)); }}>
-              <MenuItem value={ALL}>All landslides</MenuItem>
-              {index?.slides.map((s) => <MenuItem key={s.fid} value={String(s.fid)}>Landslide {s.fid} ({s.id})</MenuItem>)}
-            </Select>
-          </FormControl>
+          {/* type to search: the text matched is "Landslide <fid> (<id>)", so a fid or any part of the id finds it */}
+          <Autocomplete
+            options={[ALL, ...(index?.slides.map((s) => String(s.fid)) ?? [])]}
+            value={slideSel}
+            disableClearable
+            getOptionLabel={(v) => v === ALL ? "All landslides" : `Landslide ${v} (${index?.slides.find((s) => String(s.fid) === v)?.id ?? ""})`}
+            onChange={(_, v) => { setSlideSel(v); if (v !== ALL) setPicked(Number(v)); }}
+            renderInput={(params) => <TextField {...params} placeholder="Type a number or id to search" />}
+            sx={{ "& .MuiOutlinedInput-root": { bgcolor: UNCA_BLUE, color: "#fff", "& fieldset, &:hover fieldset, &.Mui-focused fieldset": { borderColor: UNCA_BLUE } },
+                  "& .MuiSvgIcon-root": { color: "#fff" }, "& input::placeholder": { color: "#fff", opacity: 0.8 } }}
+          />
         </Card>
 
         <Card title="Model run">
