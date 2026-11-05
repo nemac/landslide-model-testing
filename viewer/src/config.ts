@@ -52,9 +52,30 @@ export const LAYERS = [
   { id: "sources", label: "Source areas" },
   { id: "points", label: "Release points" },
   { id: "inventory", label: "NC landslide inventory (NCGS)" },
+  { id: "elevchange", label: "Ground surface change 2017 to 2025 (NCGS lidar)" },
   { id: "buildings", label: "Buildings touched (Overture)" },
   { id: "roads", label: "Roads touched (Overture)" },
 ] as const;
+
+// NCGS lidar change detection, 27 western counties: height change in metres between the
+// 2017 and 2025 lidar, drawn by the service in its own 12 classes (loss in reds, gain in blues)
+export const ELEV_CHANGE_URL = "https://services.nconemap.gov/secure/rest/services/Elevation/nc_elevation_change_20172025/ImageServer/exportImage"
+  + "?f=image&format=png32&transparent=true&bboxSR=3857&imageSR=3857&size=256,256"
+  + "&renderingRule=" + encodeURIComponent('{"rasterFunction":"NCGS_LCD_classifier"}') + "&bbox={bbox-epsg-3857}";
+export const ELEV_CHANGE_CLASSES = [
+  { label: "lost more than 6.5 m", color: "#a40000" },
+  { label: "lost 5.3 to 6.5 m", color: "#b32b23" },
+  { label: "lost 4.1 to 5.3 m", color: "#c25545" },
+  { label: "lost 2.8 to 4.1 m", color: "#d28068" },
+  { label: "lost 1.5 to 2.8 m", color: "#e1aa8b" },
+  { label: "lost 0.75 to 1.5 m", color: "#f0d5ad" },
+  { label: "gained 0.75 to 1.5 m", color: "#ccffff" },
+  { label: "gained 1.5 to 2.8 m", color: "#aad4ee" },
+  { label: "gained 2.8 to 4.1 m", color: "#88aadc" },
+  { label: "gained 4.1 to 5.3 m", color: "#6680cb" },
+  { label: "gained 5.3 to 6.5 m", color: "#4455ba" },
+  { label: "gained more than 6.5 m", color: "#222ba8" },
+];
 export const BUILDING_COLOR = "#fff7bc";
 export const ROAD_COLOR = "#d95f0e";
 export type LayerId = (typeof LAYERS)[number]["id"];

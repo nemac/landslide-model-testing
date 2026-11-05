@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl, { Map, MapMouseEvent } from "maplibre-gl";
 import { Protocol } from "pmtiles";
-import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, LayerId, ROAD_COLOR, Slide } from "./config";
+import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, ELEV_CHANGE_URL, LayerId, ROAD_COLOR, Slide } from "./config";
 
 const CLICKABLE = ["deposit-fill", "arrival-fill", "hydrograph-pt", "sources-fill", "points-pt"];
 const RUN_LAYERS = ["deposit-fill", "arrival-fill", "deposit-3d", "arrival-3d", "hydrograph-pt"];
@@ -84,11 +84,14 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
           inventory: { type: "vector", url: `pmtiles://${INVENTORY}`, attribution: "NC Geological Survey landslide inventory" },
           "hit-buildings": { type: "geojson", data: { type: "FeatureCollection", features: [] }, attribution: "© Overture Maps Foundation" },
           "hit-roads": { type: "geojson", data: { type: "FeatureCollection", features: [] } },
+          // NCGS lidar change detection, drawn by the ArcGIS image service one map tile at a time
+          elevchange: { type: "raster", tiles: [ELEV_CHANGE_URL], tileSize: 256, minzoom: 10, attribution: "NCGS lidar change 2017 to 2025" },
           // elevation tiles for 3D terrain when the map is tilted (AWS Terrarium, open data)
           "terrain-dem": { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 15 },
         },
         layers: [
           ...baseLayers,
+          { id: "elevchange-img", type: "raster", source: "elevchange", layout: { visibility: "none" }, paint: { "raster-opacity": 0.8 } },
           { id: "inventory-fill", type: "fill", source: "inventory", "source-layer": "inventory", paint: { "fill-color": "#1f78b4", "fill-opacity": 0.35, "fill-outline-color": "#1f78b4" } },
           { id: "inventory-line", type: "line", source: "inventory", "source-layer": "inventory", paint: { "line-color": "#1f78b4", "line-width": 1 } },
           {
@@ -218,6 +221,7 @@ export default function MapView({ run, fid, basemap, visible, slides, version, h
     show(["sources-fill", "sources-line"], visible.sources);
     show(["points-pt"], visible.points);
     show(["inventory-fill", "inventory-line"], visible.inventory);
+    show(["elevchange-img"], visible.elevchange);
     show(["hit-buildings"], visible.buildings);
     show(["hit-roads"], visible.roads);
   };

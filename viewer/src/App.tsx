@@ -7,7 +7,7 @@ import type { SliderValueLabelProps } from "@mui/material/Slider";
 import MapView from "./MapView";
 import { CompareCharts, ReviewCharts, SlideCharts } from "./Charts";
 import { Impacts, countImpacts, latestOvertureRelease } from "./overture";
-import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, Index, LAYERS, LayerId, ROAD_COLOR, RUN_HELP, depthHelp, describeRun, rainHelp, slopeHelp } from "./config";
+import { ARRIVAL_BINS, BASEMAPS, BasemapKey, BUILDING_COLOR, DEPTH_BANDS, ELEV_CHANGE_CLASSES, Index, LAYERS, LayerId, ROAD_COLOR, RUN_HELP, depthHelp, describeRun, rainHelp, slopeHelp } from "./config";
 
 const LEFT = 360;              // left panel default width; the user can drag it between the two below
 const MIN_LEFT = 280;
@@ -23,7 +23,7 @@ const DEFAULT_FID = 1;
 const EMPTY = { volumes: [], profile: [], bands: ["0-1 cm", "1-5 cm", "5-20 cm", "20-50 cm", "50-100 cm", ">100 cm"].map((label) => ({ label, area_m2: 0 })), storm: null };
 
 // the left-panel settings live in the URL hash, so a link brings back the same view
-const DEFAULT_VISIBLE: Record<LayerId, boolean> = { deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, buildings: true, roads: true };
+const DEFAULT_VISIBLE: Record<LayerId, boolean> = { deposit: true, arrival: false, hydrograph: true, sources: true, points: true, inventory: true, elevchange: false, buildings: true, roads: true };
 const urlState = new URLSearchParams(window.location.hash.replace(/^#/, ""));
 const fromUrl = (key: string, fallback: string) => urlState.get(key) ?? fallback;
 function visibleFromUrl(): Record<LayerId, boolean> {
@@ -188,6 +188,10 @@ export default function App() {
         {DEPTH_BANDS.map((b) => <Swatch key={b.band} color={b.color} label={b.label} />)}
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5, mb: 0.5 }}>Arrival time</Typography>
         {ARRIVAL_BINS.map((b) => <Swatch key={b.bin} color={b.color} label={b.label} />)}
+        {visible.elevchange && <>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5, mb: 0.5 }}>Ground surface change 2017 to 2025</Typography>
+          {ELEV_CHANGE_CLASSES.map((c) => <Swatch key={c.label} color={c.color} label={c.label} />)}
+        </>}
         </Card>
       </Drawer>
 
